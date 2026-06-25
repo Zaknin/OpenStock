@@ -2,7 +2,7 @@ import TradingViewWidget from '@/components/TradingViewWidget';
 import { CANDLE_CHART_WIDGET_CONFIG } from '@/lib/constants';
 
 const TRADINGVIEW_SCRIPT_URL = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-const TRADINGVIEW_SOXL_SYMBOL = 'NASDAQ:SOXL';
+const TRADINGVIEW_SOXL_SYMBOL = 'AMEX:SOXL';
 
 export default function SoxlChartPanel() {
     return (
