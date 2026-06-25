@@ -1,18 +1,16 @@
+import MarketSnapshotGrid from '@/components/soxl-intelligence/MarketSnapshotGrid';
+import SoxlChartPanel from '@/components/soxl-intelligence/SoxlChartPanel';
+import {
+    MARKET_SNAPSHOT_SYMBOLS,
+    createUnavailableMarketSnapshot,
+} from '@/lib/soxl-intelligence/market-data/types';
+import { getSoxlMarketSnapshots } from '@/lib/soxl-intelligence/market-data/snapshots';
+
 const placeholderSections = [
     {
-        title: 'Current assessment',
-        status: 'Not configured yet',
-        description: 'The deterministic SOXL signal state and current trade assessment will appear here in a later stage.',
-    },
-    {
-        title: 'SOXL chart and levels',
-        status: 'Coming in Stage 2',
-        description: 'SOXL chart context, price levels, entry zones, invalidation, and targets will be added after market snapshots are wired.',
-    },
-    {
-        title: 'QQQ and SMH market context',
-        status: 'Coming in Stage 2',
-        description: 'QQQ market regime and SMH semiconductor-sector context will be shown here once reusable snapshots are available.',
+        title: 'Deterministic assessment',
+        status: 'Coming in Stage 3',
+        description: 'The deterministic SOXL signal state, entry conditions, invalidation, and targets will appear here in a later stage.',
     },
     {
         title: 'AI explanation',
@@ -26,7 +24,21 @@ const placeholderSections = [
     },
 ];
 
-export default function SoxlIntelligencePage() {
+async function loadMarketSnapshots() {
+    try {
+        return await getSoxlMarketSnapshots();
+    } catch {
+        const fetchedAt = new Date().toISOString();
+
+        return MARKET_SNAPSHOT_SYMBOLS.map((symbol) =>
+            createUnavailableMarketSnapshot(symbol, fetchedAt, 'provider_error'),
+        );
+    }
+}
+
+export default async function SoxlIntelligencePage() {
+    const snapshots = await loadMarketSnapshots();
+
     return (
         <div className="min-h-screen bg-black text-gray-100 p-6 md:p-8">
             <section className="mb-8 max-w-4xl">
@@ -42,7 +54,12 @@ export default function SoxlIntelligencePage() {
                 </p>
             </section>
 
-            <section className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <div className="space-y-10">
+                <MarketSnapshotGrid snapshots={snapshots} />
+                <SoxlChartPanel />
+            </div>
+
+            <section className="mt-10 grid grid-cols-1 gap-5 lg:grid-cols-3">
                 {placeholderSections.map((section) => (
                     <article
                         key={section.title}
