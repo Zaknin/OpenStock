@@ -63,40 +63,6 @@ const SERIES_PRESENTATION: readonly SeriesPresentationDefinition[] = [
     },
 ];
 
-const etDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: 'America/New_York',
-});
-
-const utcTradingDateFormatter = new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeZone: 'UTC',
-});
-
-export type MarketDataTimestampKind = 'aggregate' | 'intraday' | 'daily';
-
-export function formatMarketDataTimestamp(
-    timestamp: number | null,
-    kind: MarketDataTimestampKind,
-): string {
-    if (timestamp === null) {
-        return '\u2014';
-    }
-
-    const date = new Date(timestamp * 1000);
-
-    if (Number.isNaN(date.getTime())) {
-        return '\u2014';
-    }
-
-    if (kind === 'daily') {
-        return `${utcTradingDateFormatter.format(date)} \u00b7 trading date`;
-    }
-
-    return `${etDateTimeFormatter.format(date)} ET`;
-}
-
 export function buildSoxlMarketContextView(
     context: SoxlMarketContextResult,
 ): SoxlMarketContextView {

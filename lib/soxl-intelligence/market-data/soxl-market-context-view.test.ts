@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
     buildSoxlMarketContextView,
-    formatMarketDataTimestamp,
 } from '@/lib/soxl-intelligence/market-data/soxl-market-context-view';
 import type {
     CandleInterval,
@@ -267,53 +266,5 @@ describe('buildSoxlMarketContextView determinism and mutation', () => {
         expect(first).toEqual(second);
         expect(first.series[0].latestCompletedTimestamp).toBe(100);
         expect(JSON.stringify(context)).toBe(before);
-    });
-});
-
-describe('formatMarketDataTimestamp', () => {
-    const dailyUtcMidnight = Date.UTC(2026, 5, 25, 0, 0, 0) / 1000;
-    const intradayTimestamp = Date.UTC(2026, 5, 25, 14, 30, 0) / 1000;
-
-    it('formats a daily UTC-midnight timestamp as the provider trading date', () => {
-        expect(formatMarketDataTimestamp(dailyUtcMidnight, 'daily')).toBe(
-            'Jun 25, 2026 \u00b7 trading date',
-        );
-    });
-
-    it('does not shift the displayed daily trading date to the prior ET calendar date', () => {
-        const formatted = formatMarketDataTimestamp(dailyUtcMidnight, 'daily');
-
-        expect(formatted).toContain('Jun 25, 2026');
-        expect(formatted).not.toContain('Jun 24, 2026');
-        expect(formatted).not.toContain('ET');
-    });
-
-    it('formats intraday timestamps as America/New_York date-times', () => {
-        expect(formatMarketDataTimestamp(intradayTimestamp, 'intraday')).toBe(
-            'Jun 25, 2026, 10:30 AM ET',
-        );
-    });
-
-    it('renders null timestamps as an em dash', () => {
-        expect(formatMarketDataTimestamp(null, 'daily')).toBe('\u2014');
-        expect(formatMarketDataTimestamp(null, 'intraday')).toBe('\u2014');
-        expect(formatMarketDataTimestamp(null, 'aggregate')).toBe('\u2014');
-    });
-
-    it('does not use the system clock', () => {
-        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
-            throw new Error('Date.now should not be used');
-        });
-
-        try {
-            expect(formatMarketDataTimestamp(dailyUtcMidnight, 'daily')).toBe(
-                'Jun 25, 2026 \u00b7 trading date',
-            );
-            expect(formatMarketDataTimestamp(intradayTimestamp, 'aggregate')).toBe(
-                'Jun 25, 2026, 10:30 AM ET',
-            );
-        } finally {
-            nowSpy.mockRestore();
-        }
     });
 });

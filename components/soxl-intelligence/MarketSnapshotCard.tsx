@@ -1,4 +1,8 @@
 import type { MarketSnapshot } from '@/lib/soxl-intelligence/market-data/types';
+import {
+    formatSoxlDisplayIsoTimestamp,
+    formatSoxlDisplayTimestamp,
+} from '@/lib/soxl-intelligence/presentation/time-format';
 
 interface MarketSnapshotCardProps {
     snapshot: MarketSnapshot;
@@ -35,25 +39,11 @@ function getChangeClasses(value: number | null): string {
 }
 
 function formatProviderTimestamp(timestamp: number | null): string {
-    if (timestamp === null) return 'N/A';
-    const date = new Date(timestamp * 1000);
-    if (Number.isNaN(date.getTime())) return 'N/A';
-
-    return new Intl.DateTimeFormat('en-US', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-        timeZone: 'America/New_York',
-    }).format(date);
+    return formatSoxlDisplayTimestamp(timestamp);
 }
 
 function formatFetchedAt(fetchedAt: string): string {
-    const date = new Date(fetchedAt);
-    if (Number.isNaN(date.getTime())) return 'N/A';
-
-    return new Intl.DateTimeFormat('en-US', {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-    }).format(date);
+    return formatSoxlDisplayIsoTimestamp(fetchedAt);
 }
 
 function SnapshotMetric({ label, value }: { label: string; value: string }) {

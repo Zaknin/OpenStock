@@ -1,8 +1,13 @@
 import TradingViewWidget from '@/components/TradingViewWidget';
 import { CANDLE_CHART_WIDGET_CONFIG } from '@/lib/constants';
+import { SOXL_DISPLAY_TIME_ZONE } from '@/lib/soxl-intelligence/presentation/time-format';
 
 const TRADINGVIEW_SCRIPT_URL = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
 const TRADINGVIEW_SOXL_SYMBOL = 'AMEX:SOXL';
+const tradingViewSoxlConfig = {
+    ...CANDLE_CHART_WIDGET_CONFIG(TRADINGVIEW_SOXL_SYMBOL),
+    timezone: SOXL_DISPLAY_TIME_ZONE,
+};
 
 export default function SoxlChartPanel() {
     return (
@@ -23,7 +28,7 @@ export default function SoxlChartPanel() {
             <div className="rounded-xl border border-gray-800 bg-gray-900/30 p-5 backdrop-blur-sm">
                 <TradingViewWidget
                     scriptUrl={TRADINGVIEW_SCRIPT_URL}
-                    config={CANDLE_CHART_WIDGET_CONFIG(TRADINGVIEW_SOXL_SYMBOL)}
+                    config={tradingViewSoxlConfig}
                     className="custom-chart"
                     height={600}
                     allowExpand

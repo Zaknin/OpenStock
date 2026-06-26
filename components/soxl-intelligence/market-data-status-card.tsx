@@ -1,11 +1,14 @@
 import type {
     CandleSeriesErrorCode,
 } from '@/lib/soxl-intelligence/market-data/candle-types';
-import {
-    formatMarketDataTimestamp,
-    type SoxlMarketContextView,
-    type SoxlMarketSeriesView,
+import type {
+    SoxlMarketContextView,
+    SoxlMarketSeriesView,
 } from '@/lib/soxl-intelligence/market-data/soxl-market-context-view';
+import {
+    formatSoxlDailyTradingDate,
+    formatSoxlDisplayTimestamp,
+} from '@/lib/soxl-intelligence/presentation/time-format';
 
 export interface MarketDataStatusCardProps {
     view: SoxlMarketContextView;
@@ -51,7 +54,9 @@ function StatusPill({ status }: { status: SoxlMarketSeriesView['status'] }) {
 }
 
 function SeriesRow({ series }: { series: SoxlMarketSeriesView }) {
-    const timestampKind = series.interval === '1d' ? 'daily' : 'intraday';
+    const latestCompletedBar = series.interval === '1d'
+        ? formatSoxlDailyTradingDate(series.latestCompletedTimestamp)
+        : formatSoxlDisplayTimestamp(series.latestCompletedTimestamp);
 
     return (
         <article className="rounded-lg border border-gray-800 bg-black/20 p-4">
@@ -83,7 +88,7 @@ function SeriesRow({ series }: { series: SoxlMarketSeriesView }) {
                         Latest completed bar
                     </dt>
                     <dd className="mt-1 text-sm font-semibold text-gray-100">
-                        {formatMarketDataTimestamp(series.latestCompletedTimestamp, timestampKind)}
+                        {latestCompletedBar}
                     </dd>
                 </div>
                 <div>
@@ -146,7 +151,7 @@ export default function MarketDataStatusCard({ view }: MarketDataStatusCardProps
                                     As of
                                 </dt>
                                 <dd className="mt-1 font-semibold text-gray-100">
-                                    {formatMarketDataTimestamp(view.asOf, 'aggregate')}
+                                    {formatSoxlDisplayTimestamp(view.asOf)}
                                 </dd>
                             </div>
                             <div>
