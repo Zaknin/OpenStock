@@ -61,3 +61,11 @@ export interface MovingAverageInput {
     asOf: number;
     period: number;
 }
+
+export interface PeriodIndicatorInput {
+    candles: readonly MarketCandle[];
+    expectedSymbol: CandleSymbol;
+    expectedInterval: CandleInterval;
+    asOf: number;
+    period: number;
+}
