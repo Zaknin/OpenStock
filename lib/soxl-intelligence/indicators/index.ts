@@ -23,6 +23,11 @@ export type {
     PriceRangeLevel,
     RelativeVolumeInput,
     SessionVolumeIndicatorInput,
+    SwingDetectionInput,
+    SwingDetectionIssue,
+    SwingDetectionResult,
+    SwingPoint,
+    SwingType,
     VolumeIndicatorIssue,
     VolumeIndicatorSeriesResult,
 } from './types';
@@ -60,3 +65,6 @@ export {
     calculatePremarketLevels,
     calculatePreviousDayLevels,
 } from './levels';
+export {
+    detectConfirmedSwings,
+} from './swings';

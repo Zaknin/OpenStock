@@ -202,3 +202,60 @@ export type PremarketLevelsInput = PriceLevelInput;
 export interface OpeningRangeLevelsInput extends PriceLevelInput {
     openingRangeMinutes: number;
 }
+
+export type SwingType =
+    | 'high'
+    | 'low';
+
+export type SwingDetectionIssue =
+    | 'invalid_left_bars'
+    | 'invalid_right_bars'
+    | 'insufficient_confirmation_history';
+
+export interface SwingDetectionInput {
+    candles: readonly MarketCandle[];
+    expectedSymbol: CandleSymbol;
+    expectedInterval: CandleInterval;
+    asOf: number;
+
+    /**
+     * Number of completed candles required before the candidate pivot.
+     */
+    leftBars: number;
+
+    /**
+     * Number of completed candles required after the candidate pivot
+     * before it becomes confirmed.
+     */
+    rightBars: number;
+}
+
+export interface SwingPoint {
+    type: SwingType;
+    price: number;
+
+    /**
+     * Timestamp of the candle where the pivot occurred.
+     */
+    pivotTimestamp: number;
+
+    /**
+     * Timestamp of the final right-side candle that confirmed the pivot.
+     * The swing must not be exposed before this timestamp.
+     */
+    confirmedAtTimestamp: number;
+
+    pivotIndex: number;
+    confirmedAtIndex: number;
+}
+
+export interface SwingDetectionResult {
+    status: IndicatorStatus;
+    swings: SwingPoint[];
+    latestHigh: SwingPoint | null;
+    latestLow: SwingPoint | null;
+    requiredBars: number;
+    usedBars: number;
+    issue?: SwingDetectionIssue;
+    validationIssues: CandleValidationIssue[];
+}
