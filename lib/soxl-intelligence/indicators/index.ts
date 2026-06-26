@@ -4,6 +4,7 @@ export type {
     IndicatorSeriesResult,
     IndicatorStatus,
     IndicatorValue,
+    IntradayIndicatorSession,
     MacdInput,
     MacdPoint,
     MacdSeriesResult,
@@ -12,6 +13,10 @@ export type {
     PeriodIndicatorInput,
     PreparedIndicatorCandles,
     PrepareIndicatorCandlesInput,
+    RelativeVolumeInput,
+    SessionVolumeIndicatorInput,
+    VolumeIndicatorIssue,
+    VolumeIndicatorSeriesResult,
 } from './types';
 export { prepareIndicatorCandles } from './prepare';
 export {
@@ -34,3 +39,11 @@ export {
     calculateLatestMacd,
     calculateMacdSeries,
 } from './macd';
+export {
+    calculateLatestSessionVwap,
+    calculateSessionVwapSeries,
+} from './vwap';
+export {
+    calculateLatestRelativeVolume,
+    calculateRelativeVolumeSeries,
+} from './relative-volume';

@@ -105,3 +105,48 @@ export interface MacdSeriesResult {
     usedBars: number;
     validationIssues: CandleValidationIssue[];
 }
+
+export type IntradayIndicatorSession =
+    | 'premarket'
+    | 'regular'
+    | 'after_hours';
+
+export interface SessionVolumeIndicatorInput {
+    candles: readonly MarketCandle[];
+    expectedSymbol: CandleSymbol;
+    expectedInterval: CandleInterval;
+    asOf: number;
+
+    session: IntradayIndicatorSession;
+
+    /**
+     * Inclusive Unix-second session-window boundary.
+     */
+    sessionStart: number;
+
+    /**
+     * Exclusive Unix-second session-window boundary.
+     */
+    sessionEnd: number;
+}
+
+export interface RelativeVolumeInput
+    extends SessionVolumeIndicatorInput {
+    lookbackBars: number;
+}
+
+export type VolumeIndicatorIssue =
+    | 'invalid_session_window'
+    | 'unsupported_daily_interval'
+    | 'no_matching_session_candles'
+    | 'insufficient_usable_volume'
+    | 'missing_current_volume'
+    | 'missing_baseline_volume'
+    | 'zero_total_volume'
+    | 'zero_average_volume'
+    | 'invalid_lookback';
+
+export interface VolumeIndicatorSeriesResult
+    extends IndicatorSeriesResult {
+    issue?: VolumeIndicatorIssue;
+}
