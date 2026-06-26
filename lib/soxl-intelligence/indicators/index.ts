@@ -10,9 +10,17 @@ export type {
     MacdSeriesResult,
     MacdValue,
     MovingAverageInput,
+    OpeningRangeLevelsInput,
     PeriodIndicatorInput,
+    PremarketLevelsInput,
     PreparedIndicatorCandles,
     PrepareIndicatorCandlesInput,
+    PreviousDayLevelsInput,
+    PriceLevelInput,
+    PriceLevelIssue,
+    PriceLevelStatus,
+    PriceLevelWindow,
+    PriceRangeLevel,
     RelativeVolumeInput,
     SessionVolumeIndicatorInput,
     VolumeIndicatorIssue,
@@ -47,3 +55,8 @@ export {
     calculateLatestRelativeVolume,
     calculateRelativeVolumeSeries,
 } from './relative-volume';
+export {
+    calculateOpeningRangeLevels,
+    calculatePremarketLevels,
+    calculatePreviousDayLevels,
+} from './levels';

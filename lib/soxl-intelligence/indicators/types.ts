@@ -150,3 +150,55 @@ export interface VolumeIndicatorSeriesResult
     extends IndicatorSeriesResult {
     issue?: VolumeIndicatorIssue;
 }
+
+export type PriceLevelStatus =
+    | 'available'
+    | 'insufficient_history'
+    | 'invalid_input';
+
+export type PriceLevelIssue =
+    | 'invalid_window'
+    | 'window_not_completed'
+    | 'unsupported_daily_interval'
+    | 'interval_exceeds_window'
+    | 'no_matching_candles';
+
+export interface PriceLevelWindow {
+    /**
+     * Inclusive Unix-second boundary.
+     */
+    start: number;
+
+    /**
+     * Exclusive Unix-second boundary.
+     */
+    end: number;
+}
+
+export interface PriceLevelInput {
+    candles: readonly MarketCandle[];
+    expectedSymbol: CandleSymbol;
+    expectedInterval: CandleInterval;
+    asOf: number;
+    window: PriceLevelWindow;
+}
+
+export interface PriceRangeLevel {
+    high: number | null;
+    low: number | null;
+    highTimestamp: number | null;
+    lowTimestamp: number | null;
+    status: PriceLevelStatus;
+    usedBars: number;
+    window: PriceLevelWindow;
+    issue?: PriceLevelIssue;
+    validationIssues: CandleValidationIssue[];
+}
+
+export type PreviousDayLevelsInput = PriceLevelInput;
+
+export type PremarketLevelsInput = PriceLevelInput;
+
+export interface OpeningRangeLevelsInput extends PriceLevelInput {
+    openingRangeMinutes: number;
+}
