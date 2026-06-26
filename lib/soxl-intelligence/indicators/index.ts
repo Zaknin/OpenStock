@@ -4,6 +4,10 @@ export type {
     IndicatorSeriesResult,
     IndicatorStatus,
     IndicatorValue,
+    MacdInput,
+    MacdPoint,
+    MacdSeriesResult,
+    MacdValue,
     MovingAverageInput,
     PeriodIndicatorInput,
     PreparedIndicatorCandles,
@@ -26,3 +30,7 @@ export {
     calculateAtrSeries,
     calculateLatestAtr,
 } from './atr';
+export {
+    calculateLatestMacd,
+    calculateMacdSeries,
+} from './macd';

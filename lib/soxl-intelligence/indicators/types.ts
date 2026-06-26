@@ -69,3 +69,39 @@ export interface PeriodIndicatorInput {
     asOf: number;
     period: number;
 }
+
+export interface MacdInput {
+    candles: readonly MarketCandle[];
+    expectedSymbol: CandleSymbol;
+    expectedInterval: CandleInterval;
+    asOf: number;
+    fastPeriod?: number;
+    slowPeriod?: number;
+    signalPeriod?: number;
+}
+
+export interface MacdPoint {
+    timestamp: number;
+    macd: number;
+    signal: number;
+    histogram: number;
+}
+
+export interface MacdValue {
+    macd: number | null;
+    signal: number | null;
+    histogram: number | null;
+    timestamp: number | null;
+    status: IndicatorStatus;
+    requiredBars: number;
+    usedBars: number;
+}
+
+export interface MacdSeriesResult {
+    values: MacdPoint[];
+    latest: MacdValue;
+    status: IndicatorStatus;
+    requiredBars: number;
+    usedBars: number;
+    validationIssues: CandleValidationIssue[];
+}
