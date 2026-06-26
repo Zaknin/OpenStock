@@ -1,10 +1,13 @@
 import MarketSnapshotGrid from '@/components/soxl-intelligence/MarketSnapshotGrid';
+import MarketDataStatusCard from '@/components/soxl-intelligence/market-data-status-card';
 import SoxlChartPanel from '@/components/soxl-intelligence/SoxlChartPanel';
 import {
     MARKET_SNAPSHOT_SYMBOLS,
     createUnavailableMarketSnapshot,
 } from '@/lib/soxl-intelligence/market-data/types';
 import { getSoxlMarketSnapshots } from '@/lib/soxl-intelligence/market-data/snapshots';
+import { buildSoxlMarketContextView } from '@/lib/soxl-intelligence/market-data/soxl-market-context-view';
+import { loadServerSoxlMarketContext } from '@/lib/soxl-intelligence/market-data/server/soxl-market-context-service';
 
 const placeholderSections = [
     {
@@ -37,7 +40,11 @@ async function loadMarketSnapshots() {
 }
 
 export default async function SoxlIntelligencePage() {
-    const snapshots = await loadMarketSnapshots();
+    const [snapshots, historicalContext] = await Promise.all([
+        loadMarketSnapshots(),
+        loadServerSoxlMarketContext(),
+    ]);
+    const historicalContextView = buildSoxlMarketContextView(historicalContext);
 
     return (
         <div className="min-h-screen bg-black text-gray-100 p-6 md:p-8">
@@ -56,6 +63,7 @@ export default async function SoxlIntelligencePage() {
 
             <div className="space-y-10">
                 <MarketSnapshotGrid snapshots={snapshots} />
+                <MarketDataStatusCard view={historicalContextView} />
                 <SoxlChartPanel />
             </div>
 
