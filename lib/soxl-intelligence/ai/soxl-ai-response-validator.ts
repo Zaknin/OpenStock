@@ -298,6 +298,25 @@ function validateUnavailableSections(
     }
 }
 
+function validateApplicabilitySections(
+    response: SoxlAiExplanationResponseContract,
+    evidence: SoxlAiEvidencePackage,
+    issues: SoxlAiResponseValidationIssue[],
+): void {
+    const hasPlanEvidence = evidence.groups.planAssumptions.length > 0
+        || evidence.groups.planCalculations.length > 0;
+    const hasMonitoringEvidence = evidence.groups.executionAssumptions.length > 0
+        || evidence.groups.monitoringCalculations.length > 0;
+
+    if (!hasPlanEvidence && response.tradePlanExplanation.length > 0) {
+        addIssue(issues, 'invalid_response_shape');
+    }
+
+    if (!hasMonitoringEvidence && response.monitoringChanges.length > 0) {
+        addIssue(issues, 'invalid_response_shape');
+    }
+}
+
 const prohibitedPatterns: readonly RegExp[] = [
     /\byou\s+should\s+(buy|sell|hold|add|reduce|close|exit)\b/iu,
     /\b(buy|sell)\s+now\b/iu,
@@ -421,6 +440,7 @@ export function validateSoxlAiExplanationResponse(
     if (response !== null) {
         validateStatusAndSnapshot(response, evidence, issues);
         validateUnavailableSections(response, evidence, issues);
+        validateApplicabilitySections(response, evidence, issues);
         validateProhibitedContent(response, issues);
     }
 

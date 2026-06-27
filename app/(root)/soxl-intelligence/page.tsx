@@ -3,6 +3,7 @@ import MarketDataStatusCard from '@/components/soxl-intelligence/market-data-sta
 import MarketFactsStatusCard from '@/components/soxl-intelligence/market-facts-status-card';
 import MarketAssessmentStatusCard from '@/components/soxl-intelligence/market-assessment-status-card';
 import TradePlanCalculatorCard from '@/components/soxl-intelligence/trade-plan-calculator-card';
+import GroundedAiExplanationCard from '@/components/soxl-intelligence/grounded-ai-explanation-card';
 import CoreIndicatorStatusCard from '@/components/soxl-intelligence/core-indicator-status-card';
 import SessionAnalysisStatusCard from '@/components/soxl-intelligence/session-analysis-status-card';
 import SoxlChartPanel from '@/components/soxl-intelligence/SoxlChartPanel';
@@ -77,6 +78,10 @@ export default async function SoxlIntelligencePage() {
                 <TradePlanCalculatorCard
                     assessment={marketAssessment}
                     marketFacts={marketFacts}
+                />
+                <GroundedAiExplanationCard
+                    providerId={marketFacts.providerId}
+                    asOf={String(marketFacts.asOf)}
                 />
                 <SoxlChartPanel />
             </div>

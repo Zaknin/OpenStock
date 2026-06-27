@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
+    SoxlAiEvidenceGroups,
+    SoxlAiEvidenceItem,
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
 import type {
@@ -110,6 +112,72 @@ function response(
 
 function raw(value: unknown): string {
     return JSON.stringify(value);
+}
+
+type ApplicabilityGroup = keyof Pick<
+    SoxlAiEvidenceGroups,
+    'planAssumptions' | 'planCalculations' | 'executionAssumptions' | 'monitoringCalculations'
+>;
+
+const applicabilityItems: Record<ApplicabilityGroup, SoxlAiEvidenceItem> = {
+    planAssumptions: {
+        id: 'plan.assumptions.side',
+        source: 'trade_plan',
+        snapshotRole: 'plan_context',
+        sourcePath: 'plan.input.side',
+        label: 'Plan side',
+        trustClass: 'user_supplied_plan_assumption',
+        availability: 'available',
+        value: 'long',
+        unit: null,
+    },
+    planCalculations: {
+        id: 'plan.calculations.maximum_quantity',
+        source: 'trade_plan',
+        snapshotRole: 'plan_context',
+        sourcePath: 'plan.calculation.maximumQuantity',
+        label: 'Maximum quantity',
+        trustClass: 'deterministic_plan_calculation',
+        availability: 'available',
+        value: 10,
+        unit: 'shares',
+    },
+    executionAssumptions: {
+        id: 'monitor.assumptions.entry_price',
+        source: 'live_trade_monitor',
+        snapshotRole: 'monitoring_baseline',
+        sourcePath: 'monitor.input.entryPrice',
+        label: 'Entry price',
+        trustClass: 'user_supplied_execution_assumption',
+        availability: 'available',
+        value: 26.5,
+        unit: 'usd',
+    },
+    monitoringCalculations: {
+        id: 'monitor.calculations.price.current_completed_5m_price',
+        source: 'live_trade_monitor',
+        snapshotRole: 'monitoring_current',
+        sourcePath: 'monitor.priceMonitoring.currentPrice',
+        label: 'Current completed five-minute price',
+        trustClass: 'deterministic_monitoring_calculation',
+        availability: 'available',
+        value: 27,
+        unit: 'usd',
+    },
+};
+
+function evidenceWithApplicability(group: ApplicabilityGroup): SoxlAiEvidencePackage {
+    const base = evidence();
+    const item = applicabilityItems[group];
+
+    return {
+        ...base,
+        items: [...base.items, item],
+        groups: {
+            ...base.groups,
+            [group]: [item.id],
+        },
+    };
 }
 
 function expectIssue(
@@ -266,6 +334,50 @@ describe('validateSoxlAiExplanationResponse', () => {
         expect(validateSoxlAiExplanationResponse(raw(response({ summary: [point(text)] })), evidence())).toMatchObject({
             valid: true,
         });
+    });
+
+    it('requires empty trade-plan explanation when plan evidence groups are empty', () => {
+        expectIssue(response({
+            tradePlanExplanation: [point('Plan explanation is not applicable.', [availableId])],
+        }), 'invalid_response_shape', evidence());
+    });
+
+    it('requires empty monitoring changes when monitoring evidence groups are empty', () => {
+        expectIssue(response({
+            monitoringChanges: [point('Monitoring changes are not applicable.', [availableId])],
+        }), 'invalid_response_shape', evidence());
+    });
+
+    it.each([
+        'planAssumptions',
+        'planCalculations',
+    ] as const)('permits grounded plan explanation when %s evidence exists', (group) => {
+        const packageEvidence = evidenceWithApplicability(group);
+        const evidenceId = applicabilityItems[group].id;
+        expect(validateSoxlAiExplanationResponse(raw(response({
+            tradePlanExplanation: [point('Plan evidence is grounded.', [evidenceId])],
+        })), packageEvidence)).toMatchObject({ valid: true });
+    });
+
+    it.each([
+        'executionAssumptions',
+        'monitoringCalculations',
+    ] as const)('permits grounded monitoring changes when %s evidence exists', (group) => {
+        const packageEvidence = evidenceWithApplicability(group);
+        const evidenceId = applicabilityItems[group].id;
+        expect(validateSoxlAiExplanationResponse(raw(response({
+            monitoringChanges: [point('Monitoring evidence is grounded.', [evidenceId])],
+        })), packageEvidence)).toMatchObject({ valid: true });
+    });
+
+    it('does not let applicability checks affect other grounded sections', () => {
+        expect(validateSoxlAiExplanationResponse(raw(response({
+            summary: [point('Current market summary is grounded.', [availableId])],
+            supportingEvidence: [point('Supporting evidence is grounded.', [availableId])],
+            conflictingEvidence: [point('Conflicting evidence is grounded.', [availableId])],
+            riskReminders: [point('Risk reminder is grounded.', [availableId])],
+            limitations: [point('Limitation is grounded.', [availableId])],
+        })), evidence())).toMatchObject({ valid: true });
     });
 
     it('does not mutate evidence and produces deterministic validation results', () => {
