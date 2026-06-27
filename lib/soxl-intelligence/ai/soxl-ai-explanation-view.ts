@@ -27,7 +27,8 @@ export interface SoxlAiExplanationView {
     readonly statusLabel: string;
     readonly explanationStatus: SoxlAiExplanationStatus | null;
     readonly explanationStatusLabel: string;
-    readonly providerId: string;
+    readonly providerId: string | null;
+    readonly providerLabel: string | null;
     readonly asOf: string | null;
     readonly asOfLabel: string;
     readonly snapshotToken: string | null;
@@ -43,6 +44,7 @@ export interface SoxlAiExplanationView {
 }
 
 const unavailableLabel = 'Unavailable';
+const snapshotTokenPattern = /^soxl-current-v1:[a-f0-9]{64}$/;
 
 function formatStatusLabel(status: SoxlAiExplanationStatus | null): string {
     if (status === 'available') {
@@ -74,6 +76,7 @@ const issueMessages: Record<SoxlAiCurrentExplanationIssue, string> = {
     status_mismatch: 'The AI response did not pass the grounding and safety checks.',
     snapshot_identity_mismatch: 'The AI response did not pass the grounding and safety checks.',
     unknown_evidence_reference: 'The AI response did not pass the grounding and safety checks.',
+    ungrounded_numeric_claim: 'The AI response did not pass the grounding and safety checks.',
     invalid_missing_evidence_reference: 'The AI response did not pass the grounding and safety checks.',
     uncited_missing_evidence: 'The AI response did not pass the grounding and safety checks.',
     prohibited_content: 'The AI response did not pass the grounding and safety checks.',
@@ -100,36 +103,61 @@ function formatAsOf(value: string | null): string {
 }
 
 function identityMatches(
+    resultStatus: SoxlAiCurrentExplanationResult['status'],
     snapshotToken: string | null,
     currentSnapshot: SoxlAiExplanationCurrentSnapshotInput | null,
 ): boolean {
-    if (currentSnapshot === null) {
+    if (
+        resultStatus !== 'available'
+        || snapshotToken === null
+        || currentSnapshot === null
+        || !snapshotTokenPattern.test(currentSnapshot.snapshotToken)
+    ) {
         return true;
     }
 
-    return snapshotToken !== null
-        && snapshotToken === currentSnapshot.snapshotToken;
+    return snapshotToken === currentSnapshot.snapshotToken;
+}
+
+function formatProviderLabel(providerId: string | null): string | null {
+    if (providerId === null || providerId.trim().length === 0) {
+        return null;
+    }
+
+    if (providerId === 'gemini') {
+        return 'Gemini';
+    }
+
+    if (providerId === 'minimax') {
+        return 'MiniMax';
+    }
+
+    if (providerId === 'siray') {
+        return 'Siray';
+    }
+
+    return providerId;
 }
 
 export function buildSoxlAiExplanationView(
     result: SoxlAiCurrentExplanationResult,
     currentSnapshot: SoxlAiExplanationCurrentSnapshotInput | null = null,
 ): SoxlAiExplanationView {
-    const explanationIdentity = {
-        providerId: result.explanation?.snapshotIdentity.providerId ?? unavailableLabel,
-        asOf: result.explanation?.snapshotIdentity.asOf ?? null,
-    };
+    const asOf = result.explanation?.snapshotIdentity.asOf ?? null;
+    const providerId = result.providerId;
 
     return {
         status: result.status,
         statusLabel: result.status === 'available' ? 'Available' : 'Unavailable',
         explanationStatus: result.explanation?.status ?? null,
         explanationStatusLabel: formatStatusLabel(result.explanation?.status ?? null),
-        providerId: explanationIdentity.providerId,
-        asOf: explanationIdentity.asOf,
-        asOfLabel: formatAsOf(explanationIdentity.asOf),
+        providerId,
+        providerLabel: formatProviderLabel(providerId),
+        asOf,
+        asOfLabel: formatAsOf(asOf),
         snapshotToken: result.snapshotToken,
         describesCurrentSnapshot: identityMatches(
+            result.status,
             result.snapshotToken,
             currentSnapshot,
         ),

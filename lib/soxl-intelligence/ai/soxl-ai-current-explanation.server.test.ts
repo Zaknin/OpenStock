@@ -236,6 +236,7 @@ function dependencies(
         status: 'available',
         explanation: explanation(),
         issues: [],
+        providerId: 'gemini',
     });
     const loader = vi.fn().mockResolvedValue(snapshot());
     const evidenceBuilder = vi.fn(buildSoxlAiEvidencePackage);
@@ -281,6 +282,7 @@ describe('generateCurrentSoxlExplanation', () => {
             issues: [],
             retryAfterSeconds: null,
             snapshotToken: validInput.expectedSnapshotToken,
+            providerId: 'gemini',
         });
         expect(deps.loader).toHaveBeenCalledTimes(1);
         expect(deps.service).toHaveBeenCalledTimes(1);
@@ -311,6 +313,7 @@ describe('generateCurrentSoxlExplanation', () => {
             issues: ['invalid_request'],
             retryAfterSeconds: null,
             snapshotToken: null,
+            providerId: null,
         });
         expect(deps.loader).not.toHaveBeenCalled();
         expect(deps.service).not.toHaveBeenCalled();
@@ -354,6 +357,7 @@ describe('generateCurrentSoxlExplanation', () => {
             issues: [issue],
             retryAfterSeconds,
             snapshotToken: null,
+            providerId: null,
         });
         expect(deps.loader).not.toHaveBeenCalled();
     });
@@ -368,6 +372,7 @@ describe('generateCurrentSoxlExplanation', () => {
                 status: 'unavailable',
                 explanation: null,
                 issues: ['provider_error'],
+                providerId: 'gemini',
             }),
         });
         await generateCurrentSoxlExplanation(validInput, failureDeps);
@@ -477,6 +482,7 @@ describe('generateCurrentSoxlExplanation', () => {
                 status: 'unavailable',
                 explanation: null,
                 issues: ['provider_error', 'invalid_response_shape'],
+                providerId: 'gemini',
                 raw: 'secret',
             }),
         });
@@ -489,6 +495,7 @@ describe('generateCurrentSoxlExplanation', () => {
             issues: ['provider_error', 'invalid_response_shape'],
             retryAfterSeconds: null,
             snapshotToken: null,
+            providerId: 'gemini',
         });
         expect(JSON.stringify(result)).not.toContain('secret');
     });

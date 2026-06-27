@@ -51,6 +51,7 @@ export interface SoxlAiCurrentExplanationResult {
     readonly issues: readonly SoxlAiCurrentExplanationIssue[];
     readonly retryAfterSeconds: number | null;
     readonly snapshotToken: string | null;
+    readonly providerId: string | null;
 }
 
 export interface SoxlCurrentDeterministicSnapshot {
@@ -76,6 +77,7 @@ const snapshotTokenPattern = /^soxl-current-v1:[a-f0-9]{64}$/;
 function unavailable(
     issue: SoxlAiCurrentExplanationIssue,
     retryAfterSeconds: number | null = null,
+    providerId: string | null = null,
 ): SoxlAiCurrentExplanationResult {
     return {
         status: 'unavailable',
@@ -83,6 +85,7 @@ function unavailable(
         issues: [issue],
         retryAfterSeconds,
         snapshotToken: null,
+        providerId,
     };
 }
 
@@ -192,6 +195,7 @@ export async function generateCurrentSoxlExplanation(
                 issues: [],
                 retryAfterSeconds: null,
                 snapshotToken,
+                providerId: serviceResult.providerId,
             };
         }
 
@@ -201,6 +205,7 @@ export async function generateCurrentSoxlExplanation(
             issues: serviceResult.issues,
             retryAfterSeconds: null,
             snapshotToken: null,
+            providerId: serviceResult.providerId,
         };
     } finally {
         permit.release();

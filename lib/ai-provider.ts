@@ -10,11 +10,39 @@ export interface AIProviderConfig {
 export interface AIProviderStructuredRequest {
   readonly systemInstruction: string;
   readonly userInstruction: string;
+  readonly responseFormat?: AIProviderResponseFormat;
 }
 
 export type AIProviderRequest =
   | string
   | AIProviderStructuredRequest;
+
+export type AIProviderJsonSchemaType =
+  | 'OBJECT'
+  | 'ARRAY'
+  | 'STRING'
+  | 'BOOLEAN'
+  | 'NUMBER'
+  | 'INTEGER';
+
+export interface AIProviderJsonSchema {
+  readonly type: AIProviderJsonSchemaType;
+  readonly properties?: Readonly<Record<string, AIProviderJsonSchema>>;
+  readonly required?: readonly string[];
+  readonly items?: AIProviderJsonSchema;
+  readonly enum?: readonly string[];
+  readonly nullable?: boolean;
+}
+
+export interface AIProviderResponseFormat {
+  readonly mimeType: 'application/json';
+  readonly schema: AIProviderJsonSchema;
+}
+
+export interface AIProviderCallResult {
+  readonly providerId: AIProviderName;
+  readonly text: string;
+}
 
 export type AIProviderErrorCode =
   | 'provider_not_configured'
@@ -156,12 +184,28 @@ function geminiBody(request: AIProviderRequest): object {
     };
   }
 
-  return {
+  const body: {
+    systemInstruction: { readonly parts: readonly [{ readonly text: string }] };
+    contents: readonly [{ readonly role: 'user'; readonly parts: readonly [{ readonly text: string }] }];
+    generationConfig?: {
+      readonly responseMimeType: string;
+      readonly responseSchema: AIProviderJsonSchema;
+    };
+  } = {
     systemInstruction: {
       parts: [{ text: request.systemInstruction }],
     },
     contents: [{ role: 'user', parts: [{ text: request.userInstruction }] }],
   };
+
+  if (request.responseFormat !== undefined) {
+    body.generationConfig = {
+      responseMimeType: request.responseFormat.mimeType,
+      responseSchema: request.responseFormat.schema,
+    };
+  }
+
+  return body;
 }
 
 function openAiMessages(request: AIProviderRequest): readonly object[] {
@@ -266,18 +310,39 @@ export async function callAIProvider(
   return callOpenAICompatible(request, config);
 }
 
+export async function callAIProviderDetailed(
+  request: AIProviderRequest,
+  provider?: AIProviderName,
+): Promise<AIProviderCallResult> {
+  const config = getProviderConfig(provider);
+  const text = config.name === 'gemini'
+    ? await callGemini(request, config)
+    : await callOpenAICompatible(request, config);
+
+  return {
+    providerId: config.name,
+    text,
+  };
+}
+
 export async function callAIProviderWithFallback(
   request: AIProviderRequest,
 ): Promise<string> {
+  return (await callAIProviderWithFallbackDetailed(request)).text;
+}
+
+export async function callAIProviderWithFallbackDetailed(
+  request: AIProviderRequest,
+): Promise<AIProviderCallResult> {
   const primaryName =
     (process.env.AI_PROVIDER as AIProviderName) || 'gemini';
   const fallbackName = getFallbackProviderName(primaryName);
 
   try {
-    return await callAIProvider(request, primaryName);
+    return await callAIProviderDetailed(request, primaryName);
   } catch {
     try {
-      return await callAIProvider(request, fallbackName);
+      return await callAIProviderDetailed(request, fallbackName);
     } catch {
       throw new AIProviderError('all_providers_failed', null);
     }

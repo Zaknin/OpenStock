@@ -18,6 +18,7 @@ export type SoxlAiResponseValidationIssue =
     | 'status_mismatch'
     | 'snapshot_identity_mismatch'
     | 'unknown_evidence_reference'
+    | 'ungrounded_numeric_claim'
     | 'invalid_missing_evidence_reference'
     | 'uncited_missing_evidence'
     | 'prohibited_content';
@@ -343,7 +344,17 @@ function validateProhibitedContent(
     response: SoxlAiExplanationResponseContract,
     issues: SoxlAiResponseValidationIssue[],
 ): void {
-    const allPoints: readonly SoxlAiExplanationPoint[] = [
+    const allPoints = allResponsePoints(response);
+
+    if (allPoints.some((point) => prohibitedPatterns.some((pattern) => pattern.test(point.text)))) {
+        addIssue(issues, 'prohibited_content');
+    }
+}
+
+function allResponsePoints(
+    response: SoxlAiExplanationResponseContract,
+): readonly SoxlAiExplanationPoint[] {
+    return [
         ...response.summary,
         ...response.supportingEvidence,
         ...response.conflictingEvidence,
@@ -353,10 +364,67 @@ function validateProhibitedContent(
         ...response.riskReminders,
         ...response.limitations,
     ];
+}
 
-    if (allPoints.some((point) => prohibitedPatterns.some((pattern) => pattern.test(point.text)))) {
-        addIssue(issues, 'prohibited_content');
+function explicitNumericClaims(text: string): readonly number[] {
+    const claims: number[] = [];
+    const numericPattern = /(?:\$\s*)?-?\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*(?:%|×|x)?/giu;
+    let match: RegExpExecArray | null;
+
+    while ((match = numericPattern.exec(text)) !== null) {
+        const raw = match[0].trim();
+        const hasExplicitNumericSignal = raw.includes('$')
+            || raw.includes('.')
+            || /[%×x]$/iu.test(raw);
+        if (!hasExplicitNumericSignal) {
+            continue;
+        }
+
+        const numeric = Number(raw.replace(/[$,%×x\s]/giu, ''));
+        if (Number.isFinite(numeric)) {
+            claims.push(numeric);
+        }
     }
+
+    return claims;
+}
+
+function citedNumericValues(
+    evidenceIds: readonly string[],
+    evidenceItemsById: ReadonlyMap<string, { readonly value: unknown }>,
+): readonly number[] {
+    return evidenceIds.flatMap((id) => {
+        const value = evidenceItemsById.get(id)?.value;
+        return typeof value === 'number' && Number.isFinite(value) ? [value] : [];
+    });
+}
+
+function numericClaimIsGrounded(claim: number, evidenceValues: readonly number[]): boolean {
+    return evidenceValues.some((value) => {
+        const tolerance = Math.max(0.01, Math.abs(value) * 0.0001);
+        return Math.abs(value - claim) <= tolerance
+            || [0, 1, 2, 3, 4].some((digits) => Number(value.toFixed(digits)) === claim);
+    });
+}
+
+function validateNumericGrounding(
+    response: SoxlAiExplanationResponseContract,
+    evidence: SoxlAiEvidencePackage,
+    issues: SoxlAiResponseValidationIssue[],
+): void {
+    const evidenceItemsById = new Map(evidence.items.map((item) => [item.id, item]));
+
+    allResponsePoints(response).forEach((point) => {
+        const claims = explicitNumericClaims(point.text);
+        if (claims.length === 0) {
+            return;
+        }
+
+        const evidenceValues = citedNumericValues(point.evidenceIds, evidenceItemsById);
+        if (claims.some((claim) => !numericClaimIsGrounded(claim, evidenceValues))) {
+            addIssue(issues, 'ungrounded_numeric_claim');
+        }
+    });
 }
 
 function buildResponse(
@@ -441,6 +509,7 @@ export function validateSoxlAiExplanationResponse(
         validateStatusAndSnapshot(response, evidence, issues);
         validateUnavailableSections(response, evidence, issues);
         validateApplicabilitySections(response, evidence, issues);
+        validateNumericGrounding(response, evidence, issues);
         validateProhibitedContent(response, issues);
     }
 

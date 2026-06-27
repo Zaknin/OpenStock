@@ -325,7 +325,7 @@ describe('validateSoxlAiExplanationResponse', () => {
     it.each([
         'This response does not recommend an action.',
         'No outcome is guaranteed.',
-        'The latest completed close is available.',
+        'The latest completed close is $27.12.',
         'The invalidation level was reached.',
         'The MACD signal line is below the MACD line.',
         'The user supplied a long side.',
@@ -334,6 +334,20 @@ describe('validateSoxlAiExplanationResponse', () => {
         expect(validateSoxlAiExplanationResponse(raw(response({ summary: [point(text)] })), evidence())).toMatchObject({
             valid: true,
         });
+    });
+
+    it('rejects explicit numeric claims that are not grounded in cited evidence values', () => {
+        expectIssue(
+            response({ summary: [point('The latest completed close is $999.99.')] }),
+            'ungrounded_numeric_claim',
+        );
+    });
+
+    it('permits rounded explicit numeric claims grounded in cited evidence values', () => {
+        expect(validateSoxlAiExplanationResponse(
+            raw(response({ summary: [point('The latest completed close is $27.12.')] })),
+            evidence(),
+        )).toMatchObject({ valid: true });
     });
 
     it('requires empty trade-plan explanation when plan evidence groups are empty', () => {

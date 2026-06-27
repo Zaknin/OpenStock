@@ -228,9 +228,11 @@ export default function GroundedAiExplanationCard({
                                 <div>
                                     <StatusPill view={view} />
                                     <dl className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                        <Detail label="Provider" value={view.providerId} />
+                                        {view.providerLabel !== null ? (
+                                            <Detail label="Provider" value={view.providerLabel} />
+                                        ) : null}
                                         <Detail label="As of" value={view.asOfLabel} />
-                                        <Detail label="Explanation status" value={view.statusLabel} />
+                                        <Detail label="Explanation status" value={view.explanationStatusLabel} />
                                     </dl>
                                 </div>
                             </div>

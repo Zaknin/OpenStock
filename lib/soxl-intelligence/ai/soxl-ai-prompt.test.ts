@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     buildSoxlAiPrompt,
+    soxlAiExplanationResponseFormat,
+    soxlAiExplanationResponseJsonSchema,
 } from './soxl-ai-prompt';
 import type {
     SoxlAiEvidencePackage,
@@ -172,7 +174,8 @@ describe('buildSoxlAiPrompt', () => {
         expect(unavailable.userInstruction).toContain('do not reconstruct missing market facts');
         expect(partial.userInstruction).toContain('If the evidence package status is partial');
         expect(partial.userInstruction).toContain('explain only available parts and list missing parts separately');
-        expect(partial.systemInstruction).toContain('Return only the structured response shape');
+        expect(partial.systemInstruction).toContain('Return only a valid JSON object matching the structured response shape');
+        expect(partial.systemInstruction).toContain('no Markdown code fence');
     });
 
     it('does not embed provider or model names, environment variable names, network, logging, persistence, route, or UI behavior', () => {
@@ -205,5 +208,49 @@ describe('buildSoxlAiPrompt', () => {
         expect(dateNowSpy).not.toHaveBeenCalled();
         expect(first).toEqual(second);
         dateNowSpy.mockRestore();
+    });
+
+    it('exports the provider-facing JSON response schema for the existing response contract', () => {
+        expect(soxlAiExplanationResponseFormat).toEqual({
+            mimeType: 'application/json',
+            schema: soxlAiExplanationResponseJsonSchema,
+        });
+        expect(soxlAiExplanationResponseJsonSchema).toMatchObject({
+            type: 'OBJECT',
+            properties: {
+                status: {
+                    type: 'STRING',
+                    enum: ['available', 'partial', 'unavailable'],
+                },
+                snapshotIdentity: {
+                    type: 'OBJECT',
+                    properties: {
+                        providerId: { type: 'STRING', nullable: true },
+                        asOf: { type: 'STRING', nullable: true },
+                    },
+                    required: ['providerId', 'asOf'],
+                },
+                summary: { type: 'ARRAY' },
+                supportingEvidence: { type: 'ARRAY' },
+                conflictingEvidence: { type: 'ARRAY' },
+                missingEvidence: { type: 'ARRAY' },
+                tradePlanExplanation: { type: 'ARRAY' },
+                monitoringChanges: { type: 'ARRAY' },
+                riskReminders: { type: 'ARRAY' },
+                limitations: { type: 'ARRAY' },
+            },
+            required: [
+                'status',
+                'snapshotIdentity',
+                'summary',
+                'supportingEvidence',
+                'conflictingEvidence',
+                'missingEvidence',
+                'tradePlanExplanation',
+                'monitoringChanges',
+                'riskReminders',
+                'limitations',
+            ],
+        });
     });
 });

@@ -12,6 +12,7 @@ import {
 } from '../presentation/time-format';
 
 const providerId = 'twelve-data';
+const aiProviderId = 'gemini';
 const asOf = '1787654321';
 const snapshotToken = `soxl-current-v1:${'a'.repeat(64)}`;
 
@@ -25,6 +26,7 @@ function availableResult(): SoxlAiCurrentExplanationResult {
         retryAfterSeconds: null,
         issues: [],
         snapshotToken,
+        providerId: aiProviderId,
         explanation: {
             status: 'available',
             snapshotIdentity: { providerId, asOf },
@@ -48,7 +50,8 @@ describe('buildSoxlAiExplanationView', () => {
         expect(view.statusLabel).toBe('Available');
         expect(view.explanationStatus).toBe('available');
         expect(view.explanationStatusLabel).toBe('Available');
-        expect(view.providerId).toBe(providerId);
+        expect(view.providerId).toBe(aiProviderId);
+        expect(view.providerLabel).toBe('Gemini');
         expect(view.asOf).toBe(asOf);
         expect(view.asOfLabel).toBe(formatSoxlDisplayTimestamp(Number(asOf)));
         expect(view.asOfLabel).toContain('GMT+4');
@@ -85,14 +88,17 @@ describe('buildSoxlAiExplanationView', () => {
             issues: ['rate_limited', 'provider_error', 'invalid_response_shape'],
             retryAfterSeconds: 30,
             snapshotToken: null,
+            providerId: null,
         });
 
         expect(view.status).toBe('unavailable');
         expect(view.statusLabel).toBe('Unavailable');
         expect(view.explanationStatus).toBeNull();
         expect(view.explanationStatusLabel).toBe('Unavailable');
-        expect(view.providerId).toBe('Unavailable');
+        expect(view.providerId).toBeNull();
+        expect(view.providerLabel).toBeNull();
         expect(view.asOfLabel).toBe('Unavailable');
+        expect(view.describesCurrentSnapshot).toBe(true);
         expect(view.retryAfterSeconds).toBe(30);
         expect(view.issues.map((issue) => issue.code)).toEqual(['rate_limited', 'provider_error', 'invalid_response_shape']);
         expect(view.issues.map((issue) => issue.message)).toEqual([
@@ -121,6 +127,7 @@ describe('buildSoxlAiExplanationView', () => {
             issues: cases.map(([issue]) => issue),
             retryAfterSeconds: null,
             snapshotToken: null,
+            providerId: null,
         });
 
         expect(view.issues).toEqual(cases.map(([code, message]) => ({ code, message })));
@@ -136,6 +143,7 @@ describe('buildSoxlAiExplanationView', () => {
             'status_mismatch',
             'snapshot_identity_mismatch',
             'unknown_evidence_reference',
+            'ungrounded_numeric_claim',
             'invalid_missing_evidence_reference',
             'uncited_missing_evidence',
             'prohibited_content',
@@ -146,12 +154,15 @@ describe('buildSoxlAiExplanationView', () => {
             issues: validatorIssues,
             retryAfterSeconds: null,
             snapshotToken: null,
+            providerId: 'gemini',
         });
 
         expect(view.issues.map(({ code }) => code)).toEqual(validatorIssues);
         expect(view.issues.every(({ message }) => (
             message === 'The AI response did not pass the grounding and safety checks.'
         ))).toBe(true);
+        expect(view.providerLabel).toBe('Gemini');
+        expect(view.describesCurrentSnapshot).toBe(true);
     });
 
     it('preserves point order and each point evidence-ID order', () => {
@@ -212,6 +223,35 @@ describe('buildSoxlAiExplanationView', () => {
 
         expect(view.describesCurrentSnapshot).toBe(false);
         expect(JSON.stringify(input)).toBe(before);
+    });
+
+    it.each([
+        'invalid_request',
+        'rate_limited',
+        'stale_snapshot',
+        'provider_error',
+        'invalid_response_shape',
+    ] as const)('does not mark null-token unavailable %s result as earlier', (issue) => {
+        const view = buildSoxlAiExplanationView({
+            status: 'unavailable',
+            explanation: null,
+            issues: [issue],
+            retryAfterSeconds: issue === 'rate_limited' ? 30 : null,
+            snapshotToken: null,
+            providerId: issue === 'invalid_response_shape' ? 'gemini' : null,
+        }, { snapshotToken });
+
+        expect(view.describesCurrentSnapshot).toBe(true);
+        expect(view.snapshotToken).toBeNull();
+    });
+
+    it('does not mark an available result with null token as earlier', () => {
+        const view = buildSoxlAiExplanationView({
+            ...availableResult(),
+            snapshotToken: null,
+        }, { snapshotToken });
+
+        expect(view.describesCurrentSnapshot).toBe(true);
     });
 
     it('does not mark different response asOf as earlier when tokens match', () => {

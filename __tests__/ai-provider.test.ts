@@ -3,9 +3,12 @@ import {
   AIProviderError,
   AI_PROVIDER_TIMEOUT_MS,
   callAIProvider,
+  callAIProviderDetailed,
   callAIProviderWithFallback,
+  callAIProviderWithFallbackDetailed,
   getFallbackProviderName,
   getProviderConfig,
+  type AIProviderResponseFormat,
 } from "@/lib/ai-provider";
 
 const originalEnv = { ...process.env };
@@ -46,6 +49,17 @@ function requestBody(callIndex = 0): Record<string, unknown> {
   const init = fetch.mock.calls[callIndex]?.[1] as RequestInit;
   return JSON.parse(String(init.body)) as Record<string, unknown>;
 }
+
+const jsonResponseFormat: AIProviderResponseFormat = {
+  mimeType: "application/json",
+  schema: {
+    type: "OBJECT",
+    properties: {
+      status: { type: "STRING", enum: ["available", "unavailable"] },
+    },
+    required: ["status"],
+  },
+};
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -179,6 +193,38 @@ describe("callAIProvider", () => {
     });
   });
 
+  it("keeps structured Gemini requests without schema backwards compatible", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
+
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+    }, "gemini");
+
+    expect(requestBody()).not.toHaveProperty("generationConfig");
+  });
+
+  it("adds Gemini JSON output configuration only when a response schema is supplied", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));
+
+    await expect(callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseFormat: jsonResponseFormat,
+    }, "gemini")).resolves.toBe('{"status":"available"}');
+
+    expect(requestBody()).toEqual({
+      systemInstruction: { parts: [{ text: "system text" }] },
+      contents: [{ role: "user", parts: [{ text: "user text" }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: jsonResponseFormat.schema,
+      },
+    });
+  });
+
   it("uses system and user roles for structured OpenAI-compatible requests", async () => {
     process.env.MINIMAX_API_KEY = "test-minimax-key";
     vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody())));
@@ -192,6 +238,58 @@ describe("callAIProvider", () => {
       { role: "system", content: "system text" },
       { role: "user", content: "user text" },
     ]);
+    expect(requestBody()).not.toHaveProperty("generationConfig");
+    expect(requestBody()).not.toHaveProperty("response_format");
+  });
+
+  it("does not change MiniMax or Siray request bodies when response format is supplied", async () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    process.env.SIRAY_API_KEY = "test-siray-key";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(chatBody("minimax text")))
+      .mockResolvedValueOnce(jsonResponse(chatBody("siray text"))));
+
+    await callAIProvider({
+      systemInstruction: "system",
+      userInstruction: "user",
+      responseFormat: jsonResponseFormat,
+    }, "minimax");
+    await callAIProvider({
+      systemInstruction: "system",
+      userInstruction: "user",
+      responseFormat: jsonResponseFormat,
+    }, "siray");
+
+    expect(requestBody(0)).toEqual({
+      model: "MiniMax-M2.7",
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "user" },
+      ],
+      temperature: 0.7,
+    });
+    expect(requestBody(1)).toEqual({
+      model: "siray-1.0-ultra",
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "user" },
+      ],
+      temperature: 0.7,
+    });
+  });
+
+  it("can return the provider identity without changing string-only callers", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody("gemini text"))));
+
+    await expect(callAIProviderDetailed("plain prompt", "gemini")).resolves.toEqual({
+      providerId: "gemini",
+      text: "gemini text",
+    });
+
+    expect(requestBody()).toEqual({
+      contents: [{ role: "user", parts: [{ text: "plain prompt" }] }],
+    });
   });
 
   it("keeps provider configuration lazy", async () => {
@@ -394,6 +492,20 @@ describe("callAIProviderWithFallback", () => {
     expect(result).toBe("plain result");
     expect(requestBody()).toEqual({
       contents: [{ role: "user", parts: [{ text: "existing string prompt" }] }],
+    });
+  });
+
+  it("returns provider identity from fallback without logging sensitive data", async () => {
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(chatBody("fallback text"))));
+
+    await expect(callAIProviderWithFallbackDetailed("prompt")).resolves.toEqual({
+      providerId: "minimax",
+      text: "fallback text",
     });
   });
 });
