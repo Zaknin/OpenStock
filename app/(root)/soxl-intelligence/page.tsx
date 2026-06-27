@@ -74,7 +74,10 @@ export default async function SoxlIntelligencePage() {
                 <SessionAnalysisStatusCard view={sessionAnalysisView} />
                 <MarketFactsStatusCard view={marketFactsView} />
                 <MarketAssessmentStatusCard view={marketAssessmentView} />
-                <TradePlanCalculatorCard assessment={marketAssessment} />
+                <TradePlanCalculatorCard
+                    assessment={marketAssessment}
+                    marketFacts={marketFacts}
+                />
                 <SoxlChartPanel />
             </div>
         </div>

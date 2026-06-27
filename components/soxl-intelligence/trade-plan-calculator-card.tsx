@@ -4,6 +4,9 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import type {
     SoxlMarketAssessment,
 } from '@/lib/soxl-intelligence/strategy/soxl-market-assessment';
+import type {
+    SoxlMarketFacts,
+} from '@/lib/soxl-intelligence/strategy/soxl-market-facts';
 import {
     buildSoxlTradePlan,
     type SoxlTradePlan,
@@ -18,9 +21,16 @@ import {
     type SoxlTradePlanView,
     type SoxlTradeTargetView,
 } from '@/lib/soxl-intelligence/planning/soxl-trade-plan-view';
+import LiveTradeMonitorCard from './live-trade-monitor-card';
 
 export interface TradePlanCalculatorCardProps {
     assessment: SoxlMarketAssessment;
+    marketFacts: SoxlMarketFacts;
+}
+
+interface SelectedMonitorPlan {
+    selectionId: number;
+    plan: SoxlTradePlan;
 }
 
 interface TargetFormState {
@@ -342,10 +352,15 @@ function PlanResult({ view }: { view: SoxlTradePlanView }) {
     );
 }
 
-export default function TradePlanCalculatorCard({ assessment }: TradePlanCalculatorCardProps) {
+export default function TradePlanCalculatorCard({
+    assessment,
+    marketFacts,
+}: TradePlanCalculatorCardProps) {
     const [form, setForm] = useState<FormState>(initialForm);
     const [plan, setPlan] = useState<SoxlTradePlan | null>(null);
     const [formError, setFormError] = useState<string | null>(null);
+    const [selectedMonitorPlan, setSelectedMonitorPlan] = useState<SelectedMonitorPlan | null>(null);
+    const [monitoringActive, setMonitoringActive] = useState(false);
 
     const updateField = (key: keyof Omit<FormState, 'targets'>, value: string) => {
         setForm((current) => ({
@@ -405,10 +420,22 @@ export default function TradePlanCalculatorCard({ assessment }: TradePlanCalcula
         setFormError(null);
     };
 
+    const handleSelectForMonitoring = () => {
+        if (plan === null || plan.calculation === null || monitoringActive) {
+            return;
+        }
+
+        setSelectedMonitorPlan((current) => ({
+            selectionId: (current?.selectionId ?? 0) + 1,
+            plan,
+        }));
+    };
+
     const view = plan === null ? null : buildSoxlTradePlanView(plan);
 
     return (
-        <section aria-labelledby="soxl-trade-plan-calculator-heading" className="space-y-5">
+        <>
+            <section aria-labelledby="soxl-trade-plan-calculator-heading" className="space-y-5">
             <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-teal-400">
                     Manual risk calculator
@@ -534,14 +561,45 @@ export default function TradePlanCalculatorCard({ assessment }: TradePlanCalcula
 
                 <div className="mt-5" aria-live="polite">
                     {view ? (
-                        <PlanResult view={view} />
+                        <div className="space-y-5">
+                            <PlanResult view={view} />
+                            {plan?.calculation ? (
+                                <div className="rounded-lg border border-gray-800 bg-black/20 p-4">
+                                    <button
+                                        type="button"
+                                        onClick={handleSelectForMonitoring}
+                                        disabled={monitoringActive}
+                                        className="rounded-md border border-teal-500/60 px-4 py-2 text-sm font-semibold text-teal-200 transition-colors hover:border-teal-300 hover:text-teal-100 focus:outline-none focus:ring-2 focus:ring-teal-400 disabled:cursor-not-allowed disabled:border-gray-700 disabled:text-gray-500"
+                                    >
+                                        Use this plan for temporary monitoring
+                                    </button>
+                                    {monitoringActive ? (
+                                        <p className="mt-3 text-sm leading-6 text-gray-400">
+                                            Stop the existing temporary monitor before selecting another plan.
+                                        </p>
+                                    ) : selectedMonitorPlan?.plan === plan ? (
+                                        <p className="mt-3 text-sm leading-6 text-gray-400">
+                                            This plan is selected. Enter execution details in the temporary monitor below.
+                                        </p>
+                                    ) : null}
+                                </div>
+                            ) : null}
+                        </div>
                     ) : (
                         <p className="rounded-lg border border-gray-800 bg-black/20 p-4 text-sm leading-6 text-gray-400">
                             Enter your hypothetical plan and select Calculate plan.
                         </p>
                     )}
                 </div>
-            </div>
-        </section>
+                </div>
+            </section>
+            <LiveTradeMonitorCard
+                key={selectedMonitorPlan?.selectionId ?? 0}
+                selectedPlan={selectedMonitorPlan?.plan ?? null}
+                currentAssessment={assessment}
+                currentFacts={marketFacts}
+                onMonitoringChange={setMonitoringActive}
+            />
+        </>
     );
 }
