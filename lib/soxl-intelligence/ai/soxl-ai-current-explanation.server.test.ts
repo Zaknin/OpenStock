@@ -5,9 +5,13 @@ import type {
 import type {
     SoxlMarketFacts,
 } from '../strategy/soxl-market-facts';
-import type {
-    SoxlAiEvidencePackage,
+import {
+    buildSoxlAiEvidencePackage,
+    type SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
+import {
+    buildSoxlAiCurrentSnapshotToken,
+} from './soxl-ai-current-snapshot-token.server';
 import type {
     SoxlAiExplanationResponseContract,
 } from './soxl-ai-prompt';
@@ -224,6 +228,8 @@ function dependencies(
     readonly release: ReturnType<typeof vi.fn>;
     readonly service: ReturnType<typeof vi.fn>;
     readonly loader: ReturnType<typeof vi.fn>;
+    readonly evidenceBuilder: ReturnType<typeof vi.fn>;
+    readonly tokenBuilder: ReturnType<typeof vi.fn>;
 } {
     const release = vi.fn();
     const service = vi.fn().mockResolvedValue({
@@ -232,6 +238,8 @@ function dependencies(
         issues: [],
     });
     const loader = vi.fn().mockResolvedValue(snapshot());
+    const evidenceBuilder = vi.fn(buildSoxlAiEvidencePackage);
+    const tokenBuilder = vi.fn(buildSoxlAiCurrentSnapshotToken);
 
     return {
         release,
@@ -241,13 +249,25 @@ function dependencies(
         acquirePermit: vi.fn().mockReturnValue({ allowed: true, release }),
         loadCurrentSnapshot: loader,
         generateExplanation: service,
+        buildEvidence: evidenceBuilder,
+        buildSnapshotToken: tokenBuilder,
+        evidenceBuilder,
+        tokenBuilder,
         ...overrides,
     };
 }
 
+function tokenFor(currentSnapshot: SoxlCurrentDeterministicSnapshot = snapshot()): string {
+    return buildSoxlAiCurrentSnapshotToken(buildSoxlAiEvidencePackage({
+        facts: currentSnapshot.facts,
+        assessment: currentSnapshot.assessment,
+        plan: null,
+        monitor: null,
+    }));
+}
+
 const validInput = {
-    expectedProviderId: providerId,
-    expectedAsOf: String(asOf),
+    expectedSnapshotToken: tokenFor(),
 };
 
 describe('generateCurrentSoxlExplanation', () => {
@@ -260,6 +280,7 @@ describe('generateCurrentSoxlExplanation', () => {
             explanation: explanation(),
             issues: [],
             retryAfterSeconds: null,
+            snapshotToken: validInput.expectedSnapshotToken,
         });
         expect(deps.loader).toHaveBeenCalledTimes(1);
         expect(deps.service).toHaveBeenCalledTimes(1);
@@ -273,13 +294,14 @@ describe('generateCurrentSoxlExplanation', () => {
         { name: 'array input', input: [] },
         { name: 'primitive input', input: 'bad' },
         { name: 'empty object', input: {} },
-        { name: 'missing expected provider', input: { expectedAsOf: String(asOf) } },
-        { name: 'missing expected asOf', input: { expectedProviderId: providerId } },
+        { name: 'old provider and asOf shape', input: { expectedProviderId: providerId, expectedAsOf: String(asOf) } },
+        { name: 'missing snapshot token', input: { expectedSnapshotToken: undefined } },
         { name: 'additional request key', input: { ...validInput, extra: 'bad' } },
-        { name: 'blank expected provider', input: { expectedProviderId: '', expectedAsOf: String(asOf) } },
-        { name: 'blank expected asOf', input: { expectedProviderId: providerId, expectedAsOf: ' ' } },
-        { name: 'oversized expected provider', input: { expectedProviderId: 'p'.repeat(129), expectedAsOf: String(asOf) } },
-        { name: 'oversized expected asOf', input: { expectedProviderId: providerId, expectedAsOf: '1'.repeat(129) } },
+        { name: 'blank token', input: { expectedSnapshotToken: '' } },
+        { name: 'uppercase token', input: { expectedSnapshotToken: `soxl-current-v1:${'A'.repeat(64)}` } },
+        { name: 'missing token prefix', input: { expectedSnapshotToken: 'a'.repeat(64) } },
+        { name: 'short token digest', input: { expectedSnapshotToken: `soxl-current-v1:${'a'.repeat(63)}` } },
+        { name: 'long token digest', input: { expectedSnapshotToken: `soxl-current-v1:${'a'.repeat(65)}` } },
     ])('rejects $name', async ({ input }) => {
         const deps = dependencies();
 
@@ -288,6 +310,7 @@ describe('generateCurrentSoxlExplanation', () => {
             explanation: null,
             issues: ['invalid_request'],
             retryAfterSeconds: null,
+            snapshotToken: null,
         });
         expect(deps.loader).not.toHaveBeenCalled();
         expect(deps.service).not.toHaveBeenCalled();
@@ -296,8 +319,7 @@ describe('generateCurrentSoxlExplanation', () => {
     it('rejects objects with a non-plain prototype', async () => {
         const deps = dependencies();
         const input = Object.create(null) as Record<string, unknown>;
-        input.expectedProviderId = providerId;
-        input.expectedAsOf = String(asOf);
+        input.expectedSnapshotToken = validInput.expectedSnapshotToken;
 
         await expect(generateCurrentSoxlExplanation(input, deps)).resolves.toMatchObject({
             status: 'unavailable',
@@ -331,6 +353,7 @@ describe('generateCurrentSoxlExplanation', () => {
             explanation: null,
             issues: [issue],
             retryAfterSeconds,
+            snapshotToken: null,
         });
         expect(deps.loader).not.toHaveBeenCalled();
     });
@@ -389,17 +412,45 @@ describe('generateCurrentSoxlExplanation', () => {
         expect(deps.service).not.toHaveBeenCalled();
     });
 
-    it.each([
-        [{ expectedProviderId: 'other', expectedAsOf: String(asOf) }],
-        [{ expectedProviderId: providerId, expectedAsOf: String(asOf + 1) }],
-    ])('rejects stale client identity %j without calling the service', async (input) => {
-        const deps = dependencies();
+    it('rejects changed deterministic evidence without calling the service', async () => {
+        const baseFacts = facts();
+        const changedSnapshot = snapshot({
+            facts: facts({
+                soxl5m: {
+                    ...baseFacts.soxl5m,
+                    latestCompleted: {
+                        ...baseFacts.soxl5m.latestCompleted,
+                        close: 28,
+                    },
+                },
+            }),
+        });
+        const deps = dependencies({
+            loadCurrentSnapshot: vi.fn().mockResolvedValue(changedSnapshot),
+        });
 
-        await expect(generateCurrentSoxlExplanation(input, deps)).resolves.toMatchObject({
+        await expect(generateCurrentSoxlExplanation(validInput, deps)).resolves.toMatchObject({
             status: 'unavailable',
             issues: ['stale_snapshot'],
+            snapshotToken: null,
         });
         expect(deps.service).not.toHaveBeenCalled();
+    });
+
+    it('accepts the same deterministic evidence when request-time asOf changes', async () => {
+        const shiftedSnapshot = snapshot({
+            facts: facts({ asOf: asOf + 60 }),
+            assessment: assessment({ asOf: asOf + 60 }),
+        });
+        const deps = dependencies({
+            loadCurrentSnapshot: vi.fn().mockResolvedValue(shiftedSnapshot),
+        });
+
+        await expect(generateCurrentSoxlExplanation(validInput, deps)).resolves.toMatchObject({
+            status: 'available',
+            snapshotToken: validInput.expectedSnapshotToken,
+        });
+        expect(deps.service).toHaveBeenCalledTimes(1);
     });
 
     it('passes current server-built evidence with null plan and monitor scope to the service', async () => {
@@ -414,6 +465,10 @@ describe('generateCurrentSoxlExplanation', () => {
         expect(evidence.snapshotIdentities.map((identity) => identity.role)).toEqual(['current']);
         expect(evidence.items.some((item) => item.id.startsWith('plan.'))).toBe(false);
         expect(evidence.items.some((item) => item.id.startsWith('monitor.'))).toBe(false);
+        expect(deps.evidenceBuilder).toHaveBeenCalledTimes(1);
+        expect(deps.tokenBuilder).toHaveBeenCalledTimes(1);
+        expect(deps.tokenBuilder.mock.calls[0][0]).toBe(evidence);
+        expect(deps.service.mock.calls[0][0]).toBe(evidence);
     });
 
     it('returns sanitized service failures without raw provider details', async () => {
@@ -433,6 +488,7 @@ describe('generateCurrentSoxlExplanation', () => {
             explanation: null,
             issues: ['provider_error', 'invalid_response_shape'],
             retryAfterSeconds: null,
+            snapshotToken: null,
         });
         expect(JSON.stringify(result)).not.toContain('secret');
     });

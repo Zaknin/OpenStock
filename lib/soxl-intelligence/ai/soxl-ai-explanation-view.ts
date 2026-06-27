@@ -8,9 +8,8 @@ import type {
     SoxlAiExplanationStatus,
 } from './soxl-ai-prompt';
 
-export interface SoxlAiExplanationSnapshotIdentityInput {
-    readonly providerId: string;
-    readonly asOf: string;
+export interface SoxlAiExplanationCurrentSnapshotInput {
+    readonly snapshotToken: string;
 }
 
 export interface SoxlAiExplanationPointView {
@@ -31,6 +30,7 @@ export interface SoxlAiExplanationView {
     readonly providerId: string;
     readonly asOf: string | null;
     readonly asOfLabel: string;
+    readonly snapshotToken: string | null;
     readonly describesCurrentSnapshot: boolean;
     readonly issues: readonly SoxlAiExplanationIssueView[];
     readonly retryAfterSeconds: number | null;
@@ -100,20 +100,20 @@ function formatAsOf(value: string | null): string {
 }
 
 function identityMatches(
-    explanationIdentity: SoxlAiExplanationSnapshotIdentityInput,
-    currentIdentity: SoxlAiExplanationSnapshotIdentityInput | null,
+    snapshotToken: string | null,
+    currentSnapshot: SoxlAiExplanationCurrentSnapshotInput | null,
 ): boolean {
-    if (currentIdentity === null) {
+    if (currentSnapshot === null) {
         return true;
     }
 
-    return explanationIdentity.providerId === currentIdentity.providerId
-        && explanationIdentity.asOf === currentIdentity.asOf;
+    return snapshotToken !== null
+        && snapshotToken === currentSnapshot.snapshotToken;
 }
 
 export function buildSoxlAiExplanationView(
     result: SoxlAiCurrentExplanationResult,
-    currentIdentity: SoxlAiExplanationSnapshotIdentityInput | null = null,
+    currentSnapshot: SoxlAiExplanationCurrentSnapshotInput | null = null,
 ): SoxlAiExplanationView {
     const explanationIdentity = {
         providerId: result.explanation?.snapshotIdentity.providerId ?? unavailableLabel,
@@ -128,10 +128,11 @@ export function buildSoxlAiExplanationView(
         providerId: explanationIdentity.providerId,
         asOf: explanationIdentity.asOf,
         asOfLabel: formatAsOf(explanationIdentity.asOf),
-        describesCurrentSnapshot: identityMatches({
-            providerId: explanationIdentity.providerId,
-            asOf: explanationIdentity.asOf ?? '',
-        }, currentIdentity),
+        snapshotToken: result.snapshotToken,
+        describesCurrentSnapshot: identityMatches(
+            result.snapshotToken,
+            currentSnapshot,
+        ),
         issues: result.issues.map((issue) => ({
             code: issue,
             message: issueMessages[issue],

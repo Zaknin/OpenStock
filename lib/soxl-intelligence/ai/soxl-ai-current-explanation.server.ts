@@ -26,10 +26,13 @@ import {
     type SoxlAiInvocationGuardIssue,
     type SoxlAiInvocationGuardResult,
 } from './soxl-ai-invocation-guard.server';
+import {
+    buildSoxlAiCurrentSnapshotToken,
+    type SoxlAiCurrentSnapshotToken,
+} from './soxl-ai-current-snapshot-token.server';
 
 export interface RequestCurrentSoxlExplanationInput {
-    readonly expectedProviderId: string;
-    readonly expectedAsOf: string;
+    readonly expectedSnapshotToken: string;
 }
 
 export type SoxlAiCurrentExplanationIssue =
@@ -47,6 +50,7 @@ export interface SoxlAiCurrentExplanationResult {
     readonly explanation: SoxlAiExplanationResponseContract | null;
     readonly issues: readonly SoxlAiCurrentExplanationIssue[];
     readonly retryAfterSeconds: number | null;
+    readonly snapshotToken: string | null;
 }
 
 export interface SoxlCurrentDeterministicSnapshot {
@@ -63,9 +67,11 @@ export interface GenerateCurrentSoxlExplanationDependencies {
     readonly acquirePermit: (userId: string) => SoxlAiInvocationGuardResult;
     readonly loadCurrentSnapshot: () => Promise<SoxlCurrentDeterministicSnapshot>;
     readonly generateExplanation: (evidence: SoxlAiEvidencePackage) => Promise<SoxlAiExplanationServiceResult>;
+    readonly buildEvidence?: typeof buildSoxlAiEvidencePackage;
+    readonly buildSnapshotToken?: typeof buildSoxlAiCurrentSnapshotToken;
 }
 
-const maxIdentityLength = 128;
+const snapshotTokenPattern = /^soxl-current-v1:[a-f0-9]{64}$/;
 
 function unavailable(
     issue: SoxlAiCurrentExplanationIssue,
@@ -76,6 +82,7 @@ function unavailable(
         explanation: null,
         issues: [issue],
         retryAfterSeconds,
+        snapshotToken: null,
     };
 }
 
@@ -93,41 +100,27 @@ function parseRequest(input: unknown): RequestCurrentSoxlExplanationInput | null
 
     const keys = Object.keys(input);
     if (
-        keys.length !== 2
-        || !keys.includes('expectedProviderId')
-        || !keys.includes('expectedAsOf')
+        keys.length !== 1
+        || keys[0] !== 'expectedSnapshotToken'
     ) {
         return null;
     }
 
     if (
-        typeof input.expectedProviderId !== 'string'
-        || typeof input.expectedAsOf !== 'string'
-        || input.expectedProviderId.trim().length === 0
-        || input.expectedAsOf.trim().length === 0
-        || input.expectedProviderId.length > maxIdentityLength
-        || input.expectedAsOf.length > maxIdentityLength
+        typeof input.expectedSnapshotToken !== 'string'
+        || !snapshotTokenPattern.test(input.expectedSnapshotToken)
     ) {
         return null;
     }
 
     return {
-        expectedProviderId: input.expectedProviderId,
-        expectedAsOf: input.expectedAsOf,
+        expectedSnapshotToken: input.expectedSnapshotToken,
     };
 }
 
 function currentIdentitiesMatch(snapshot: SoxlCurrentDeterministicSnapshot): boolean {
     return snapshot.facts.providerId === snapshot.assessment.providerId
         && snapshot.facts.asOf === snapshot.assessment.asOf;
-}
-
-function requestMatchesSnapshot(
-    request: RequestCurrentSoxlExplanationInput,
-    snapshot: SoxlCurrentDeterministicSnapshot,
-): boolean {
-    return request.expectedProviderId === snapshot.facts.providerId
-        && request.expectedAsOf === String(snapshot.facts.asOf);
 }
 
 function evidenceContainsOnlyCurrentContext(evidence: SoxlAiEvidencePackage): boolean {
@@ -172,11 +165,8 @@ export async function generateCurrentSoxlExplanation(
             return unavailable('current_data_unavailable');
         }
 
-        if (!requestMatchesSnapshot(request, snapshot)) {
-            return unavailable('stale_snapshot');
-        }
-
-        const evidence = buildSoxlAiEvidencePackage({
+        const buildEvidence = dependencies.buildEvidence ?? buildSoxlAiEvidencePackage;
+        const evidence = buildEvidence({
             facts: snapshot.facts,
             assessment: snapshot.assessment,
             plan: null,
@@ -187,6 +177,13 @@ export async function generateCurrentSoxlExplanation(
             return unavailable('current_data_unavailable');
         }
 
+        const buildSnapshotToken = dependencies.buildSnapshotToken
+            ?? buildSoxlAiCurrentSnapshotToken;
+        const snapshotToken: SoxlAiCurrentSnapshotToken = buildSnapshotToken(evidence);
+        if (request.expectedSnapshotToken !== snapshotToken) {
+            return unavailable('stale_snapshot');
+        }
+
         const serviceResult = await dependencies.generateExplanation(evidence);
         if (serviceResult.status === 'available') {
             return {
@@ -194,6 +191,7 @@ export async function generateCurrentSoxlExplanation(
                 explanation: serviceResult.explanation,
                 issues: [],
                 retryAfterSeconds: null,
+                snapshotToken,
             };
         }
 
@@ -202,6 +200,7 @@ export async function generateCurrentSoxlExplanation(
             explanation: null,
             issues: serviceResult.issues,
             retryAfterSeconds: null,
+            snapshotToken: null,
         };
     } finally {
         permit.release();

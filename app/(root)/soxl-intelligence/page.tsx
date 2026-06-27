@@ -15,6 +15,8 @@ import { buildSoxlMarketFacts } from '@/lib/soxl-intelligence/strategy/soxl-mark
 import { buildSoxlMarketFactsView } from '@/lib/soxl-intelligence/strategy/soxl-market-facts-view';
 import { assessSoxlMarketFacts } from '@/lib/soxl-intelligence/strategy/soxl-market-assessment';
 import { buildSoxlMarketAssessmentView } from '@/lib/soxl-intelligence/strategy/soxl-market-assessment-view';
+import { buildSoxlAiEvidencePackage } from '@/lib/soxl-intelligence/ai/soxl-ai-evidence';
+import { buildSoxlAiCurrentSnapshotToken } from '@/lib/soxl-intelligence/ai/soxl-ai-current-snapshot-token.server';
 import {
     MARKET_SNAPSHOT_SYMBOLS,
     createUnavailableMarketSnapshot,
@@ -52,6 +54,13 @@ export default async function SoxlIntelligencePage() {
     const marketFactsView = buildSoxlMarketFactsView(marketFacts);
     const marketAssessment = assessSoxlMarketFacts(marketFacts);
     const marketAssessmentView = buildSoxlMarketAssessmentView(marketAssessment);
+    const currentAiEvidence = buildSoxlAiEvidencePackage({
+        facts: marketFacts,
+        assessment: marketAssessment,
+        plan: null,
+        monitor: null,
+    });
+    const currentSnapshotToken = buildSoxlAiCurrentSnapshotToken(currentAiEvidence);
 
     return (
         <div className="min-h-screen bg-black text-gray-100 p-6 md:p-8">
@@ -80,8 +89,7 @@ export default async function SoxlIntelligencePage() {
                     marketFacts={marketFacts}
                 />
                 <GroundedAiExplanationCard
-                    providerId={marketFacts.providerId}
-                    asOf={String(marketFacts.asOf)}
+                    snapshotToken={currentSnapshotToken}
                 />
                 <SoxlChartPanel />
             </div>

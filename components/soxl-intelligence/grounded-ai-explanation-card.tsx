@@ -13,8 +13,7 @@ import type {
 } from '@/lib/soxl-intelligence/ai/soxl-ai-current-explanation.server';
 
 export interface GroundedAiExplanationCardProps {
-    readonly providerId: string | null;
-    readonly asOf: string;
+    readonly snapshotToken: string;
 }
 
 const initialMessage = 'Select Generate explanation to request a grounded explanation of the current deterministic snapshot.';
@@ -122,19 +121,18 @@ function Issues({ view }: { view: SoxlAiExplanationView }) {
 }
 
 export default function GroundedAiExplanationCard({
-    providerId,
-    asOf,
+    snapshotToken,
 }: GroundedAiExplanationCardProps) {
     const router = useRouter();
     const [result, setResult] = useState<SoxlAiCurrentExplanationResult | null>(null);
     const [pending, setPending] = useState(false);
-    const canGenerate = providerId !== null && providerId.trim().length > 0 && asOf.trim().length > 0;
+    const canGenerate = snapshotToken.trim().length > 0;
 
     const view = useMemo(() => (
         result === null
             ? null
-            : buildSoxlAiExplanationView(result, { providerId: providerId ?? '', asOf })
-    ), [asOf, providerId, result]);
+            : buildSoxlAiExplanationView(result, { snapshotToken })
+    ), [result, snapshotToken]);
 
     const handleGenerate = async () => {
         if (pending || !canGenerate) {
@@ -144,8 +142,7 @@ export default function GroundedAiExplanationCard({
         setPending(true);
         try {
             setResult(await requestCurrentSoxlExplanation({
-                expectedProviderId: providerId,
-                expectedAsOf: asOf,
+                expectedSnapshotToken: snapshotToken,
             }));
         } finally {
             setPending(false);

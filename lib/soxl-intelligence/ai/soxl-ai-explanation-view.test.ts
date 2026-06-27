@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type {
     SoxlAiCurrentExplanationIssue,
@@ -12,6 +13,7 @@ import {
 
 const providerId = 'twelve-data';
 const asOf = '1787654321';
+const snapshotToken = `soxl-current-v1:${'a'.repeat(64)}`;
 
 function point(text: string, evidenceIds: readonly string[] = ['current.market_facts.status']) {
     return { text, evidenceIds };
@@ -22,6 +24,7 @@ function availableResult(): SoxlAiCurrentExplanationResult {
         status: 'available',
         retryAfterSeconds: null,
         issues: [],
+        snapshotToken,
         explanation: {
             status: 'available',
             snapshotIdentity: { providerId, asOf },
@@ -39,7 +42,7 @@ function availableResult(): SoxlAiCurrentExplanationResult {
 
 describe('buildSoxlAiExplanationView', () => {
     it('maps an available explanation with sections and evidence IDs in order', () => {
-        const view = buildSoxlAiExplanationView(availableResult(), { providerId, asOf });
+        const view = buildSoxlAiExplanationView(availableResult(), { snapshotToken });
 
         expect(view.status).toBe('available');
         expect(view.statusLabel).toBe('Available');
@@ -55,6 +58,7 @@ describe('buildSoxlAiExplanationView', () => {
         expect(view.missingEvidence[0].text).toBe('Missing text.');
         expect(view.riskReminders[0].text).toBe('Risk reminder text.');
         expect(view.limitations[0].text).toBe('Limitation text.');
+        expect(view.snapshotToken).toBe(snapshotToken);
         expect(view.describesCurrentSnapshot).toBe(true);
     });
 
@@ -80,6 +84,7 @@ describe('buildSoxlAiExplanationView', () => {
             explanation: null,
             issues: ['rate_limited', 'provider_error', 'invalid_response_shape'],
             retryAfterSeconds: 30,
+            snapshotToken: null,
         });
 
         expect(view.status).toBe('unavailable');
@@ -115,6 +120,7 @@ describe('buildSoxlAiExplanationView', () => {
             explanation: null,
             issues: cases.map(([issue]) => issue),
             retryAfterSeconds: null,
+            snapshotToken: null,
         });
 
         expect(view.issues).toEqual(cases.map(([code, message]) => ({ code, message })));
@@ -139,6 +145,7 @@ describe('buildSoxlAiExplanationView', () => {
             explanation: null,
             issues: validatorIssues,
             retryAfterSeconds: null,
+            snapshotToken: null,
         });
 
         expect(view.issues.map(({ code }) => code)).toEqual(validatorIssues);
@@ -195,16 +202,67 @@ describe('buildSoxlAiExplanationView', () => {
         expect(Object.keys(view)).not.toContain('confidence');
     });
 
-    it('supports earlier-snapshot detection without mutating input', () => {
+    it('marks different tokens as earlier without mutating input', () => {
         const input = availableResult();
         const before = JSON.stringify(input);
 
         const view = buildSoxlAiExplanationView(input, {
-            providerId,
-            asOf: String(Number(asOf) + 1),
+            snapshotToken: `soxl-current-v1:${'b'.repeat(64)}`,
         });
 
         expect(view.describesCurrentSnapshot).toBe(false);
         expect(JSON.stringify(input)).toBe(before);
+    });
+
+    it('does not mark different response asOf as earlier when tokens match', () => {
+        const result = availableResult();
+        const view = buildSoxlAiExplanationView({
+            ...result,
+            explanation: {
+                ...result.explanation!,
+                snapshotIdentity: {
+                    providerId,
+                    asOf: String(Number(asOf) + 60),
+                },
+            },
+        }, { snapshotToken });
+
+        expect(view.asOf).toBe(String(Number(asOf) + 60));
+        expect(view.describesCurrentSnapshot).toBe(true);
+        expect(view.snapshotToken).toBe(snapshotToken);
+    });
+
+    it('keeps the component request token-only and manually invoked', () => {
+        const source = readFileSync(new URL(
+            '../../../components/soxl-intelligence/grounded-ai-explanation-card.tsx',
+            import.meta.url,
+        ), 'utf8');
+
+        expect(source).toContain('expectedSnapshotToken: snapshotToken');
+        expect(source).not.toContain('expectedProviderId');
+        expect(source).not.toContain('expectedAsOf');
+        expect(source).not.toContain('useEffect');
+        expect(source).not.toMatch(/setInterval|setTimeout|localStorage|sessionStorage/);
+        expect(source.match(/requestCurrentSoxlExplanation\(/g)).toHaveLength(1);
+        expect(source).toContain('onClick={handleGenerate}');
+        expect(source).toContain('onClick={handleRefresh}');
+        expect(source).not.toContain('<Detail label="Snapshot token"');
+        expect(source).not.toContain('{snapshotToken}</');
+    });
+
+    it('keeps page token construction current-only with one context load', () => {
+        const source = readFileSync(new URL(
+            '../../../app/(root)/soxl-intelligence/page.tsx',
+            import.meta.url,
+        ), 'utf8');
+
+        expect(source.match(/loadServerSoxlMarketContext\(/g)).toHaveLength(1);
+        expect(source).toContain('const currentAiEvidence = buildSoxlAiEvidencePackage({');
+        expect(source).toContain('plan: null');
+        expect(source).toContain('monitor: null');
+        expect(source).toContain('buildSoxlAiCurrentSnapshotToken(currentAiEvidence)');
+        expect(source).toContain('snapshotToken={currentSnapshotToken}');
+        expect(source).not.toContain('providerId={marketFacts.providerId}');
+        expect(source).not.toContain('asOf={String(marketFacts.asOf)}');
     });
 });
