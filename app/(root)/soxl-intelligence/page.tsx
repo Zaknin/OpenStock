@@ -2,6 +2,7 @@ import MarketSnapshotGrid from '@/components/soxl-intelligence/MarketSnapshotGri
 import MarketDataStatusCard from '@/components/soxl-intelligence/market-data-status-card';
 import MarketFactsStatusCard from '@/components/soxl-intelligence/market-facts-status-card';
 import MarketAssessmentStatusCard from '@/components/soxl-intelligence/market-assessment-status-card';
+import TradePlanCalculatorCard from '@/components/soxl-intelligence/trade-plan-calculator-card';
 import CoreIndicatorStatusCard from '@/components/soxl-intelligence/core-indicator-status-card';
 import SessionAnalysisStatusCard from '@/components/soxl-intelligence/session-analysis-status-card';
 import SoxlChartPanel from '@/components/soxl-intelligence/SoxlChartPanel';
@@ -73,6 +74,7 @@ export default async function SoxlIntelligencePage() {
                 <SessionAnalysisStatusCard view={sessionAnalysisView} />
                 <MarketFactsStatusCard view={marketFactsView} />
                 <MarketAssessmentStatusCard view={marketAssessmentView} />
+                <TradePlanCalculatorCard assessment={marketAssessment} />
                 <SoxlChartPanel />
             </div>
         </div>
