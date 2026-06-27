@@ -1,6 +1,7 @@
 import MarketSnapshotGrid from '@/components/soxl-intelligence/MarketSnapshotGrid';
 import MarketDataStatusCard from '@/components/soxl-intelligence/market-data-status-card';
 import MarketFactsStatusCard from '@/components/soxl-intelligence/market-facts-status-card';
+import MarketAssessmentStatusCard from '@/components/soxl-intelligence/market-assessment-status-card';
 import CoreIndicatorStatusCard from '@/components/soxl-intelligence/core-indicator-status-card';
 import SessionAnalysisStatusCard from '@/components/soxl-intelligence/session-analysis-status-card';
 import SoxlChartPanel from '@/components/soxl-intelligence/SoxlChartPanel';
@@ -10,6 +11,8 @@ import { buildSoxlSessionAnalysisSnapshot } from '@/lib/soxl-intelligence/analys
 import { buildSoxlSessionAnalysisView } from '@/lib/soxl-intelligence/analysis/soxl-session-analysis-view';
 import { buildSoxlMarketFacts } from '@/lib/soxl-intelligence/strategy/soxl-market-facts';
 import { buildSoxlMarketFactsView } from '@/lib/soxl-intelligence/strategy/soxl-market-facts-view';
+import { assessSoxlMarketFacts } from '@/lib/soxl-intelligence/strategy/soxl-market-assessment';
+import { buildSoxlMarketAssessmentView } from '@/lib/soxl-intelligence/strategy/soxl-market-assessment-view';
 import {
     MARKET_SNAPSHOT_SYMBOLS,
     createUnavailableMarketSnapshot,
@@ -45,6 +48,8 @@ export default async function SoxlIntelligencePage() {
         session: sessionAnalysisSnapshot,
     });
     const marketFactsView = buildSoxlMarketFactsView(marketFacts);
+    const marketAssessment = assessSoxlMarketFacts(marketFacts);
+    const marketAssessmentView = buildSoxlMarketAssessmentView(marketAssessment);
 
     return (
         <div className="min-h-screen bg-black text-gray-100 p-6 md:p-8">
@@ -67,6 +72,7 @@ export default async function SoxlIntelligencePage() {
                 <CoreIndicatorStatusCard view={coreIndicatorView} />
                 <SessionAnalysisStatusCard view={sessionAnalysisView} />
                 <MarketFactsStatusCard view={marketFactsView} />
+                <MarketAssessmentStatusCard view={marketAssessmentView} />
                 <SoxlChartPanel />
             </div>
         </div>
