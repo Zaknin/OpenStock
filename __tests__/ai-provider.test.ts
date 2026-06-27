@@ -1,368 +1,399 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getProviderConfig,
-  getFallbackProviderName,
+  AIProviderError,
+  AI_PROVIDER_TIMEOUT_MS,
   callAIProvider,
   callAIProviderWithFallback,
-  type AIProviderName,
+  getFallbackProviderName,
+  getProviderConfig,
 } from "@/lib/ai-provider";
 
-// ── getProviderConfig ──────────────────────────────────────────────
+const originalEnv = { ...process.env };
+
+function resetProviderEnvironment(): void {
+  process.env = { ...originalEnv };
+  delete process.env.AI_PROVIDER;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_MODEL;
+  delete process.env.MINIMAX_API_KEY;
+  delete process.env.MINIMAX_BASE_URL;
+  delete process.env.MINIMAX_MODEL;
+  delete process.env.SIRAY_API_KEY;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    statusText: status === 200 ? "OK" : "Bad Request",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function geminiBody(text = "gemini text"): unknown {
+  return { candidates: [{ content: { parts: [{ text }] } }] };
+}
+
+function chatBody(text = "chat text"): unknown {
+  return { choices: [{ message: { content: text } }] };
+}
+
+function fetchMock(response: Response): ReturnType<typeof vi.fn> {
+  return vi.fn().mockResolvedValue(response);
+}
+
+function requestBody(callIndex = 0): Record<string, unknown> {
+  const fetch = vi.mocked(global.fetch);
+  const init = fetch.mock.calls[callIndex]?.[1] as RequestInit;
+  return JSON.parse(String(init.body)) as Record<string, unknown>;
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  resetProviderEnvironment();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  process.env = { ...originalEnv };
+});
 
 describe("getProviderConfig", () => {
-  const originalEnv = { ...process.env };
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
   it("defaults to gemini when no env var is set", () => {
-    delete process.env.AI_PROVIDER;
     const config = getProviderConfig();
+
     expect(config.name).toBe("gemini");
     expect(config.baseUrl).toContain("generativelanguage.googleapis.com");
     expect(config.model).toBe("gemini-2.5-flash-lite");
   });
 
-  it("returns minimax config when provider is minimax", () => {
+  it("returns minimax config and respects minimax environment overrides", () => {
     process.env.MINIMAX_API_KEY = "test-key";
-    const config = getProviderConfig("minimax");
-    expect(config.name).toBe("minimax");
-    expect(config.baseUrl).toBe("https://api.minimax.io/v1");
-    expect(config.model).toBe("MiniMax-M2.7");
-    expect(config.apiKey).toBe("test-key");
-  });
-
-  it("respects MINIMAX_MODEL env var", () => {
     process.env.MINIMAX_MODEL = "MiniMax-M2.5-highspeed";
-    const config = getProviderConfig("minimax");
-    expect(config.model).toBe("MiniMax-M2.5-highspeed");
-  });
-
-  it("respects MINIMAX_BASE_URL env var", () => {
     process.env.MINIMAX_BASE_URL = "https://custom.minimax.example/v1";
+
     const config = getProviderConfig("minimax");
-    expect(config.baseUrl).toBe("https://custom.minimax.example/v1");
+
+    expect(config).toEqual({
+      name: "minimax",
+      apiKey: "test-key",
+      baseUrl: "https://custom.minimax.example/v1",
+      model: "MiniMax-M2.5-highspeed",
+    });
   });
 
   it("returns siray config when provider is siray", () => {
     process.env.SIRAY_API_KEY = "siray-key";
+
     const config = getProviderConfig("siray");
-    expect(config.name).toBe("siray");
-    expect(config.baseUrl).toBe("https://api.siray.ai/v1");
-    expect(config.model).toBe("siray-1.0-ultra");
-    expect(config.apiKey).toBe("siray-key");
+
+    expect(config).toEqual({
+      name: "siray",
+      apiKey: "siray-key",
+      baseUrl: "https://api.siray.ai/v1",
+      model: "siray-1.0-ultra",
+    });
   });
 
   it("reads AI_PROVIDER from env when no argument is given", () => {
     process.env.AI_PROVIDER = "minimax";
     process.env.MINIMAX_API_KEY = "k";
-    const config = getProviderConfig();
-    expect(config.name).toBe("minimax");
+
+    expect(getProviderConfig().name).toBe("minimax");
   });
 
   it("respects GEMINI_MODEL env var", () => {
     process.env.GEMINI_MODEL = "gemini-2.0-flash";
-    const config = getProviderConfig("gemini");
-    expect(config.model).toBe("gemini-2.0-flash");
+
+    expect(getProviderConfig("gemini").model).toBe("gemini-2.0-flash");
   });
 });
 
-// ── getFallbackProviderName ────────────────────────────────────────
-
 describe("getFallbackProviderName", () => {
-  const originalEnv = { ...process.env };
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
   it("returns minimax when primary is gemini and MINIMAX_API_KEY is set", () => {
     process.env.MINIMAX_API_KEY = "k";
+
     expect(getFallbackProviderName("gemini")).toBe("minimax");
   });
 
   it("returns siray when primary is gemini and only SIRAY_API_KEY is set", () => {
-    delete process.env.MINIMAX_API_KEY;
     process.env.SIRAY_API_KEY = "s";
+
     expect(getFallbackProviderName("gemini")).toBe("siray");
   });
 
-  it("returns gemini when primary is minimax", () => {
+  it("returns gemini when primary is OpenAI-compatible", () => {
     expect(getFallbackProviderName("minimax")).toBe("gemini");
-  });
-
-  it("returns gemini when primary is siray", () => {
     expect(getFallbackProviderName("siray")).toBe("gemini");
   });
 });
 
-// ── callAIProvider ─────────────────────────────────────────────────
-
 describe("callAIProvider", () => {
-  const originalEnv = { ...process.env };
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
-  it("throws when GEMINI_API_KEY is missing for gemini provider", async () => {
-    delete process.env.GEMINI_API_KEY;
-    await expect(callAIProvider("hello", "gemini")).rejects.toThrow(
-      "GEMINI_API_KEY is not set"
-    );
-  });
-
-  it("throws when MINIMAX_API_KEY is missing for minimax provider", async () => {
-    delete process.env.MINIMAX_API_KEY;
-    await expect(callAIProvider("hello", "minimax")).rejects.toThrow(
-      "MINIMAX_API_KEY is not set"
-    );
-  });
-
-  it("throws when SIRAY_API_KEY is missing for siray provider", async () => {
-    delete process.env.SIRAY_API_KEY;
-    await expect(callAIProvider("hello", "siray")).rejects.toThrow(
-      "SIRAY_API_KEY is not set"
-    );
-  });
-
-  it("calls Gemini API with correct format", async () => {
+  it("keeps plain-string Gemini behavior compatible", async () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          candidates: [
-            { content: { parts: [{ text: "Hello from Gemini" }] } },
-          ],
-        }),
+    await expect(callAIProvider("plain prompt", "gemini")).resolves.toBe("gemini text");
+    expect(requestBody()).toEqual({
+      contents: [{ role: "user", parts: [{ text: "plain prompt" }] }],
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await callAIProvider("test prompt", "gemini");
-    expect(result).toBe("Hello from Gemini");
-
-    const [url, options] = mockFetch.mock.calls[0];
-    expect(url).toContain("generativelanguage.googleapis.com");
-    expect(url).toContain("key=test-gemini-key");
-    const body = JSON.parse(options.body);
-    expect(body.contents[0].parts[0].text).toBe("test prompt");
   });
 
-  it("calls MiniMax API with OpenAI-compatible format", async () => {
+  it("keeps plain-string OpenAI-compatible behavior compatible", async () => {
     process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody())));
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          choices: [{ message: { content: "Hello from MiniMax" } }],
-        }),
+    await expect(callAIProvider("plain prompt", "minimax")).resolves.toBe("chat text");
+    expect(requestBody()).toMatchObject({
+      model: "MiniMax-M2.7",
+      messages: [{ role: "user", content: "plain prompt" }],
+      temperature: 0.7,
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await callAIProvider("test prompt", "minimax");
-    expect(result).toBe("Hello from MiniMax");
-
-    const [url, options] = mockFetch.mock.calls[0];
-    expect(url).toBe("https://api.minimax.io/v1/chat/completions");
-    expect(options.headers["Authorization"]).toBe(
-      "Bearer test-minimax-key"
-    );
-    const body = JSON.parse(options.body);
-    expect(body.model).toBe("MiniMax-M2.7");
-    expect(body.messages[0].content).toBe("test prompt");
-    expect(body.temperature).toBe(0.7);
   });
 
-  it("calls Siray API with OpenAI-compatible format", async () => {
+  it("keeps plain-string Siray behavior compatible", async () => {
     process.env.SIRAY_API_KEY = "test-siray-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody("siray text"))));
 
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          choices: [{ message: { content: "Hello from Siray" } }],
-        }),
+    await expect(callAIProvider("plain prompt", "siray")).resolves.toBe("siray text");
+    const fetch = vi.mocked(global.fetch);
+    expect(String(fetch.mock.calls[0][0])).toBe("https://api.siray.ai/v1/chat/completions");
+    expect((fetch.mock.calls[0][1] as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer test-siray-key",
     });
-    vi.stubGlobal("fetch", mockFetch);
-
-    const result = await callAIProvider("test prompt", "siray");
-    expect(result).toBe("Hello from Siray");
-
-    const [url, options] = mockFetch.mock.calls[0];
-    expect(url).toBe("https://api.siray.ai/v1/chat/completions");
-    expect(options.headers["Authorization"]).toBe("Bearer test-siray-key");
   });
 
-  it("throws on API error response", async () => {
-    process.env.GEMINI_API_KEY = "k";
+  it("separates structured Gemini system and user content", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 429,
-        statusText: "Too Many Requests",
-      })
-    );
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+    }, "gemini");
 
-    await expect(callAIProvider("hello", "gemini")).rejects.toThrow(
-      "Gemini API error: 429"
-    );
+    expect(requestBody()).toEqual({
+      systemInstruction: { parts: [{ text: "system text" }] },
+      contents: [{ role: "user", parts: [{ text: "user text" }] }],
+    });
   });
 
-  it("throws on empty Gemini response", async () => {
-    process.env.GEMINI_API_KEY = "k";
+  it("uses system and user roles for structured OpenAI-compatible requests", async () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody())));
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ candidates: [] }),
-      })
-    );
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+    }, "minimax");
 
-    await expect(callAIProvider("hello", "gemini")).rejects.toThrow(
-      "Gemini returned empty response"
-    );
+    expect(requestBody().messages).toEqual([
+      { role: "system", content: "system text" },
+      { role: "user", content: "user text" },
+    ]);
   });
 
-  it("throws on empty MiniMax response", async () => {
-    process.env.MINIMAX_API_KEY = "k";
+  it("keeps provider configuration lazy", async () => {
+    expect(() => getProviderConfig("gemini")).not.toThrow();
 
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_not_configured",
+      providerId: "gemini",
+      message: "AI provider is not configured.",
+    });
+  });
+
+  it("returns safe typed errors for missing provider configuration", async () => {
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_not_configured",
+      providerId: "gemini",
+      message: "AI provider is not configured.",
+    });
+    await expect(callAIProvider("prompt", "minimax")).rejects.toMatchObject({
+      code: "provider_not_configured",
+      providerId: "minimax",
+      message: "AI provider is not configured.",
+    });
+    await expect(callAIProvider("prompt", "siray")).rejects.toMatchObject({
+      code: "provider_not_configured",
+      providerId: "siray",
+      message: "AI provider is not configured.",
+    });
+  });
+
+  it("maps fetch aborts to provider_timeout", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const abortError = new DOMException("secret timeout body", "AbortError");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError));
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_timeout",
+      providerId: "gemini",
+      message: "AI provider request timed out.",
+    });
+  });
+
+  it("maps HTTP failures safely without raw response body", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(new Response("raw-secret-body", { status: 500 })));
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toSatisfy((error: unknown) => (
+      error instanceof AIProviderError
+      && error.code === "provider_http_error"
+      && error.providerId === "gemini"
+      && error.message === "AI provider request failed."
+      && !error.message.includes("raw-secret-body")
+    ));
+  });
+
+  it("maps malformed provider response shapes safely", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse({ candidates: [] })));
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_invalid_response",
+      providerId: "gemini",
+      message: "AI provider returned an invalid response.",
+    });
+  });
+
+  it("rejects empty provider text as invalid response", async () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody("   "))));
+
+    await expect(callAIProvider("prompt", "minimax")).rejects.toMatchObject({
+      code: "provider_invalid_response",
+      providerId: "minimax",
+      message: "AI provider returned an invalid response.",
+    });
+  });
+
+  it("keeps secret-shaped values out of thrown errors", async () => {
+    process.env.SIRAY_API_KEY = "secret-siray-key";
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ choices: [{ message: {} }] }),
-      })
+      vi.fn().mockRejectedValue(new Error("https://secret.example/?token=secret-siray-key")),
     );
 
-    await expect(callAIProvider("hello", "minimax")).rejects.toThrow(
-      "minimax returned empty response"
-    );
+    await expect(callAIProvider("prompt", "siray")).rejects.toSatisfy((error: unknown) => (
+      error instanceof AIProviderError
+      && !error.message.includes("secret-siray-key")
+      && !error.message.includes("https://secret.example")
+      && !JSON.stringify(error).includes("secret-siray-key")
+    ));
+  });
+
+  it("sends authorization headers without exposing them in errors", async () => {
+    process.env.MINIMAX_API_KEY = "secret-minimax-key";
+    vi.stubGlobal("fetch", fetchMock(new Response("raw-body", { status: 401 })));
+
+    await expect(callAIProvider("prompt", "minimax")).rejects.toSatisfy((error: unknown) => (
+      error instanceof AIProviderError
+      && error.message === "AI provider request failed."
+      && !JSON.stringify(error).includes("secret-minimax-key")
+    ));
+    const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
+    expect(init.headers).toMatchObject({ Authorization: "Bearer secret-minimax-key" });
+  });
+
+  it("passes an abort signal and clears timeout resources", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
+
+    await callAIProvider("prompt", "gemini");
+
+    const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  it("uses the fixed provider timeout constant", () => {
+    expect(AI_PROVIDER_TIMEOUT_MS).toBe(30_000);
   });
 });
 
-// ── callAIProviderWithFallback ─────────────────────────────────────
-
 describe("callAIProviderWithFallback", () => {
-  const originalEnv = { ...process.env };
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    process.env = { ...originalEnv };
-  });
-
   it("returns primary provider result on success", async () => {
     process.env.AI_PROVIDER = "minimax";
-    process.env.MINIMAX_API_KEY = "k";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(chatBody("MiniMax response"))));
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            choices: [{ message: { content: "MiniMax response" } }],
-          }),
-      })
-    );
-
-    const result = await callAIProviderWithFallback("test");
-    expect(result).toBe("MiniMax response");
+    await expect(callAIProviderWithFallback("test")).resolves.toBe("MiniMax response");
   });
 
-  it("falls back to secondary provider on primary failure", async () => {
+  it("preserves fallback order and falls back from Gemini to MiniMax when configured", async () => {
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(chatBody("fallback text"))));
+
+    await expect(callAIProviderWithFallback("prompt")).resolves.toBe("fallback text");
+    const fetch = vi.mocked(global.fetch);
+    expect(String(fetch.mock.calls[0][0])).toContain("generativelanguage");
+    expect(String(fetch.mock.calls[1][0])).toContain("/chat/completions");
+  });
+
+  it("uses Gemini fallback for non-Gemini primary providers", async () => {
     process.env.AI_PROVIDER = "minimax";
-    process.env.MINIMAX_API_KEY = "k";
-    process.env.GEMINI_API_KEY = "g";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(geminiBody("gemini fallback"))));
 
-    let callCount = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation((url: string) => {
-        callCount++;
-        if (url.includes("minimax")) {
-          return Promise.resolve({ ok: false, status: 500, statusText: "Error" });
-        }
-        // Gemini fallback
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              candidates: [
-                { content: { parts: [{ text: "Gemini fallback" }] } },
-              ],
-            }),
-        });
-      })
-    );
-
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const result = await callAIProviderWithFallback("test");
-    expect(result).toBe("Gemini fallback");
-    expect(callCount).toBe(2);
-    consoleSpy.mockRestore();
+    await expect(callAIProviderWithFallback("prompt")).resolves.toBe("gemini fallback");
+    const fetch = vi.mocked(global.fetch);
+    expect(String(fetch.mock.calls[0][0])).toContain("/chat/completions");
+    expect(String(fetch.mock.calls[1][0])).toContain("generativelanguage");
   });
 
-  it("uses gemini as default primary and minimax as fallback", async () => {
-    delete process.env.AI_PROVIDER;
-    process.env.GEMINI_API_KEY = "g";
-    process.env.MINIMAX_API_KEY = "m";
+  it("returns a safe all-provider failure when fallback also fails", async () => {
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 500 }))
+      .mockResolvedValueOnce(new Response("", { status: 500 })));
 
-    let callCount = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation((url: string) => {
-        callCount++;
-        if (url.includes("googleapis")) {
-          return Promise.resolve({ ok: false, status: 500, statusText: "Error" });
-        }
-        // MiniMax fallback
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              choices: [{ message: { content: "MiniMax fallback" } }],
-            }),
-        });
-      })
-    );
-
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const result = await callAIProviderWithFallback("test");
-    expect(result).toBe("MiniMax fallback");
-    expect(callCount).toBe(2);
-    consoleSpy.mockRestore();
+    await expect(callAIProviderWithFallback("prompt")).rejects.toMatchObject({
+      code: "all_providers_failed",
+      providerId: null,
+      message: "All AI providers failed.",
+    });
   });
 
-  it("throws when both primary and fallback fail", async () => {
-    process.env.AI_PROVIDER = "minimax";
-    process.env.MINIMAX_API_KEY = "k";
-    process.env.GEMINI_API_KEY = "g";
+  it("does not log raw error objects, prompts, or model output during fallback", async () => {
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.MINIMAX_API_KEY = "test-minimax-key";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 500 }))
+      .mockResolvedValueOnce(jsonResponse(chatBody("model output"))));
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: "Internal Server Error",
-      })
-    );
+    await callAIProviderWithFallback("prompt");
 
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(callAIProviderWithFallback("test")).rejects.toThrow();
-    consoleSpy.mockRestore();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it("supports existing Inngest-style string callers without source changes", async () => {
+    process.env.AI_PROVIDER = "gemini";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody("plain result"))));
+
+    const result = await callAIProviderWithFallback("existing string prompt");
+
+    expect(result).toBe("plain result");
+    expect(requestBody()).toEqual({
+      contents: [{ role: "user", parts: [{ text: "existing string prompt" }] }],
+    });
   });
 });

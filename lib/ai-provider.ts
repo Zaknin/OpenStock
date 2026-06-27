@@ -1,184 +1,285 @@
-/**
- * AI Provider abstraction for OpenStock.
- *
- * Supports multiple LLM backends via the AI_PROVIDER environment variable:
- *   - "gemini"  (default) – Google Gemini REST API
- *   - "minimax" – MiniMax (OpenAI-compatible)
- *   - "siray"   – Siray.ai (OpenAI-compatible)
- *
- * Each provider returns a plain-text string from the model.
- */
-
-export type AIProviderName = "gemini" | "minimax" | "siray";
+export type AIProviderName = 'gemini' | 'minimax' | 'siray';
 
 export interface AIProviderConfig {
-  name: AIProviderName;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
+  readonly name: AIProviderName;
+  readonly apiKey: string;
+  readonly baseUrl: string;
+  readonly model: string;
 }
 
-/**
- * Resolve the provider configuration from environment variables.
- */
+export interface AIProviderStructuredRequest {
+  readonly systemInstruction: string;
+  readonly userInstruction: string;
+}
+
+export type AIProviderRequest =
+  | string
+  | AIProviderStructuredRequest;
+
+export type AIProviderErrorCode =
+  | 'provider_not_configured'
+  | 'provider_timeout'
+  | 'provider_http_error'
+  | 'provider_invalid_response'
+  | 'all_providers_failed';
+
+export class AIProviderError extends Error {
+  readonly code: AIProviderErrorCode;
+  readonly providerId: string | null;
+
+  constructor(code: AIProviderErrorCode, providerId: string | null) {
+    super(providerErrorMessage(code));
+    this.name = 'AIProviderError';
+    this.code = code;
+    this.providerId = providerId;
+  }
+}
+
+export const AI_PROVIDER_TIMEOUT_MS = 30_000;
+
+function providerErrorMessage(code: AIProviderErrorCode): string {
+  switch (code) {
+    case 'provider_not_configured':
+      return 'AI provider is not configured.';
+    case 'provider_timeout':
+      return 'AI provider request timed out.';
+    case 'provider_http_error':
+      return 'AI provider request failed.';
+    case 'provider_invalid_response':
+      return 'AI provider returned an invalid response.';
+    case 'all_providers_failed':
+      return 'All AI providers failed.';
+  }
+}
+
 export function getProviderConfig(
-  provider?: AIProviderName
+  provider?: AIProviderName,
 ): AIProviderConfig {
   const name =
-    provider ||
-    (process.env.AI_PROVIDER as AIProviderName) ||
-    "gemini";
+    provider
+    || (process.env.AI_PROVIDER as AIProviderName)
+    || 'gemini';
 
   switch (name) {
-    case "minimax":
+    case 'minimax':
       return {
-        name: "minimax",
-        apiKey: process.env.MINIMAX_API_KEY || "",
-        baseUrl:
-          process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1",
-        model: process.env.MINIMAX_MODEL || "MiniMax-M2.7",
+        name: 'minimax',
+        apiKey: process.env.MINIMAX_API_KEY || '',
+        baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.io/v1',
+        model: process.env.MINIMAX_MODEL || 'MiniMax-M2.7',
       };
-
-    case "siray":
+    case 'siray':
       return {
-        name: "siray",
-        apiKey: process.env.SIRAY_API_KEY || "",
-        baseUrl: "https://api.siray.ai/v1",
-        model: "siray-1.0-ultra",
+        name: 'siray',
+        apiKey: process.env.SIRAY_API_KEY || '',
+        baseUrl: 'https://api.siray.ai/v1',
+        model: 'siray-1.0-ultra',
       };
-
-    case "gemini":
+    case 'gemini':
     default:
       return {
-        name: "gemini",
-        apiKey: process.env.GEMINI_API_KEY || "",
-        baseUrl:
-          "https://generativelanguage.googleapis.com/v1beta/models",
-        model: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
+        name: 'gemini',
+        apiKey: process.env.GEMINI_API_KEY || '',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/models',
+        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite',
       };
   }
 }
 
-/**
- * Get the fallback provider: if the primary is Gemini use MiniMax,
- * otherwise fall back to Gemini.
- */
 export function getFallbackProviderName(
-  primary: AIProviderName
+  primary: AIProviderName,
 ): AIProviderName {
-  if (primary === "gemini") {
-    // Prefer MiniMax as fallback when a key is available, else Siray
-    if (process.env.MINIMAX_API_KEY) return "minimax";
-    if (process.env.SIRAY_API_KEY) return "siray";
-    return "minimax"; // caller will see missing-key error
+  if (primary === 'gemini') {
+    if (process.env.MINIMAX_API_KEY) {
+      return 'minimax';
+    }
+    if (process.env.SIRAY_API_KEY) {
+      return 'siray';
+    }
+    return 'minimax';
   }
-  return "gemini";
+
+  return 'gemini';
 }
 
-// ── Provider call implementations ──────────────────────────────────
+function isStructuredRequest(request: AIProviderRequest): request is AIProviderStructuredRequest {
+  return typeof request !== 'string';
+}
 
-async function callGemini(
-  prompt: string,
-  config: AIProviderConfig
-): Promise<string> {
-  if (!config.apiKey) throw new Error("GEMINI_API_KEY is not set");
+function ensureConfigured(config: AIProviderConfig): void {
+  if (!config.apiKey) {
+    throw new AIProviderError('provider_not_configured', config.name);
+  }
+}
 
-  const url = `${config.baseUrl}/${config.model}:generateContent?key=${config.apiKey}`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Gemini API error: ${res.status} ${res.statusText}`);
+function asProviderError(error: unknown, providerId: AIProviderName): AIProviderError {
+  if (error instanceof AIProviderError) {
+    return error;
   }
 
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned empty response");
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'name' in error
+    && (error as { readonly name?: unknown }).name === 'AbortError'
+  ) {
+    return new AIProviderError('provider_timeout', providerId);
+  }
+
+  return new AIProviderError('provider_http_error', providerId);
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  providerId: AIProviderName,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw asProviderError(error, providerId);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function geminiBody(request: AIProviderRequest): object {
+  if (!isStructuredRequest(request)) {
+    return {
+      contents: [{ role: 'user', parts: [{ text: request }] }],
+    };
+  }
+
+  return {
+    systemInstruction: {
+      parts: [{ text: request.systemInstruction }],
+    },
+    contents: [{ role: 'user', parts: [{ text: request.userInstruction }] }],
+  };
+}
+
+function openAiMessages(request: AIProviderRequest): readonly object[] {
+  if (!isStructuredRequest(request)) {
+    return [{ role: 'user', content: request }];
+  }
+
+  return [
+    { role: 'system', content: request.systemInstruction },
+    { role: 'user', content: request.userInstruction },
+  ];
+}
+
+function nonEmptyText(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : '';
+}
+
+async function callGemini(
+  request: AIProviderRequest,
+  config: AIProviderConfig,
+): Promise<string> {
+  ensureConfigured(config);
+
+  const url = `${config.baseUrl}/${config.model}:generateContent?key=${config.apiKey}`;
+  const res = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(geminiBody(request)),
+  }, config.name);
+
+  if (!res.ok) {
+    throw new AIProviderError('provider_http_error', config.name);
+  }
+
+  const data: unknown = await res.json();
+  const text = nonEmptyText(
+    typeof data === 'object'
+      && data !== null
+      && 'candidates' in data
+      && Array.isArray(data.candidates)
+      ? data.candidates[0]?.content?.parts?.[0]?.text
+      : null,
+  );
+
+  if (!text) {
+    throw new AIProviderError('provider_invalid_response', config.name);
+  }
+
   return text;
 }
 
 async function callOpenAICompatible(
-  prompt: string,
-  config: AIProviderConfig
+  request: AIProviderRequest,
+  config: AIProviderConfig,
 ): Promise<string> {
-  if (!config.apiKey) {
-    throw new Error(
-      `${config.name.toUpperCase()}_API_KEY is not set`
-    );
-  }
+  ensureConfigured(config);
 
-  const url = `${config.baseUrl}/chat/completions`;
-
-  const res = await fetch(url, {
-    method: "POST",
+  const res = await fetchWithTimeout(`${config.baseUrl}/chat/completions`, {
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
       model: config.model,
-      messages: [{ role: "user", content: prompt }],
+      messages: openAiMessages(request),
       temperature: 0.7,
     }),
-  });
+  }, config.name);
 
   if (!res.ok) {
-    throw new Error(
-      `${config.name} API error: ${res.status} ${res.statusText}`
-    );
+    throw new AIProviderError('provider_http_error', config.name);
   }
 
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content;
+  const data: unknown = await res.json();
+  const text = nonEmptyText(
+    typeof data === 'object'
+      && data !== null
+      && 'choices' in data
+      && Array.isArray(data.choices)
+      ? data.choices[0]?.message?.content
+      : null,
+  );
+
   if (!text) {
-    throw new Error(`${config.name} returned empty response`);
+    throw new AIProviderError('provider_invalid_response', config.name);
   }
+
   return text;
 }
 
-// ── Public API ─────────────────────────────────────────────────────
-
-/**
- * Call the configured (or specified) AI provider and return the model
- * response as a plain string.
- */
 export async function callAIProvider(
-  prompt: string,
-  provider?: AIProviderName
+  request: AIProviderRequest,
+  provider?: AIProviderName,
 ): Promise<string> {
   const config = getProviderConfig(provider);
 
-  if (config.name === "gemini") {
-    return callGemini(prompt, config);
+  if (config.name === 'gemini') {
+    return callGemini(request, config);
   }
-  // MiniMax and Siray both use OpenAI-compatible endpoints
-  return callOpenAICompatible(prompt, config);
+
+  return callOpenAICompatible(request, config);
 }
 
-/**
- * Call the AI provider with automatic fallback.
- * Tries the primary provider first; on failure switches to the fallback.
- */
 export async function callAIProviderWithFallback(
-  prompt: string
+  request: AIProviderRequest,
 ): Promise<string> {
   const primaryName =
-    (process.env.AI_PROVIDER as AIProviderName) || "gemini";
+    (process.env.AI_PROVIDER as AIProviderName) || 'gemini';
   const fallbackName = getFallbackProviderName(primaryName);
 
   try {
-    return await callAIProvider(prompt, primaryName);
-  } catch (primaryError) {
-    console.error(
-      `⚠️ ${primaryName} failed, switching to ${fallbackName} fallback`,
-      primaryError
-    );
-    return await callAIProvider(prompt, fallbackName);
+    return await callAIProvider(request, primaryName);
+  } catch {
+    try {
+      return await callAIProvider(request, fallbackName);
+    } catch {
+      throw new AIProviderError('all_providers_failed', null);
+    }
   }
 }
