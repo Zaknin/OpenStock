@@ -215,8 +215,6 @@ function explanation(): SoxlAiExplanationResponseContract {
         supportingEvidence: [],
         conflictingEvidence: [],
         missingEvidence: [],
-        tradePlanExplanation: [],
-        monitoringChanges: [],
         riskReminders: [],
         limitations: [],
     };
@@ -481,7 +479,7 @@ describe('generateCurrentSoxlExplanation', () => {
             generateExplanation: vi.fn().mockResolvedValue({
                 status: 'unavailable',
                 explanation: null,
-                issues: ['provider_error', 'invalid_response_shape'],
+                issues: ['provider_error', 'root_not_object'],
                 providerId: 'gemini',
                 raw: 'secret',
             }),
@@ -492,7 +490,7 @@ describe('generateCurrentSoxlExplanation', () => {
         expect(result).toEqual({
             status: 'unavailable',
             explanation: null,
-            issues: ['provider_error', 'invalid_response_shape'],
+            issues: ['provider_error', 'root_not_object'],
             retryAfterSeconds: null,
             snapshotToken: null,
             providerId: 'gemini',

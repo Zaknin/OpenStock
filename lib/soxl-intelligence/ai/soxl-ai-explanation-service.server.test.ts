@@ -99,8 +99,6 @@ function explanation(
         supportingEvidence: [],
         conflictingEvidence: [],
         missingEvidence: [],
-        tradePlanExplanation: [],
-        monitoringChanges: [],
         riskReminders: [],
         limitations: [],
         ...overrides,
@@ -143,8 +141,6 @@ describe('generateSoxlAiExplanation', () => {
                     'supportingEvidence',
                     'conflictingEvidence',
                     'missingEvidence',
-                    'tradePlanExplanation',
-                    'monitoringChanges',
                     'riskReminders',
                     'limitations',
                 ]),
@@ -189,9 +185,9 @@ describe('generateSoxlAiExplanation', () => {
     it.each([
         ['', 'empty_response'],
         ['{bad json', 'invalid_json'],
-        [JSON.stringify({ ...explanation(), extra: true }), 'unexpected_response_key'],
+        [JSON.stringify({ ...explanation(), modelSuppliedProperty: true }), 'unexpected_top_level_fields'],
         [JSON.stringify({ ...explanation(), summary: [point('Text', ['unknown.id'])] }), 'unknown_evidence_reference'],
-        [JSON.stringify({ ...explanation(), summary: [point('you should buy')] }), 'prohibited_content'],
+        [JSON.stringify({ ...explanation(), summary: [point('you should buy')] }), 'forbidden_recommendation'],
     ] as const)('maps validation failure: %s', async (rawResponse, issue) => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
@@ -280,18 +276,55 @@ describe('generateSoxlAiExplanation', () => {
     });
 
     it('classifies validation rejection with fixed non-sensitive reason codes', () => {
-        expect(classifySoxlAiValidationRejectionReason(['invalid_json'])).toBe('invalid_json');
-        expect(classifySoxlAiValidationRejectionReason(['unknown_evidence_reference'])).toBe('unknown_evidence_reference');
-        expect(classifySoxlAiValidationRejectionReason(['ungrounded_numeric_claim'])).toBe('ungrounded_numeric_claim');
-        expect(classifySoxlAiValidationRejectionReason(['invalid_response_shape'])).toBe('response_shape_mismatch');
-        expect(classifySoxlAiValidationRejectionReason(['prohibited_content'])).toBe('other_validation_failure');
+        expect(classifySoxlAiValidationRejectionReason({
+            valid: false,
+            value: null,
+            issues: ['missing_required_item_field'],
+            reason: 'missing_required_item_field',
+            field: 'evidenceIds',
+        })).toEqual({
+            reason: 'missing_required_item_field',
+            field: 'evidenceIds',
+        });
+    });
+
+    it('logs only the fixed reason and allowlisted field for structural rejection', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const unknownProperty = 'modelGeneratedUnknownProperty';
+        await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                summary: [{ text: 'Generated prose.', evidenceIds: [availableId], [unknownProperty]: true }],
+            })),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=other_shape_mismatch',
+        );
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(unknownProperty);
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('Generated prose');
+    });
+
+    it('logs an allowlisted field when a required nested field is missing', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                summary: [{ text: 'Generated prose.' }],
+            })),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=missing_required_item_field field=evidenceIds',
+        );
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('Generated prose');
     });
 
     it('does not include prompt, evidence, output, token, user, or credential data in validation diagnostics', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const rawResponse = JSON.stringify({
             ...explanation(),
-            extra: 'bad',
+            modelSuppliedCredentialProperty: 'bad',
             summary: [point('raw-model-output-secret with token soxl-current-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')],
         });
 
@@ -307,5 +340,6 @@ describe('generateSoxlAiExplanation', () => {
         expect(diagnostic).not.toContain('soxl-current-v1:');
         expect(diagnostic).not.toContain('user');
         expect(diagnostic).not.toContain('credential');
+        expect(diagnostic).not.toContain('modelSuppliedCredentialProperty');
     });
 });

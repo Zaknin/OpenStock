@@ -34,8 +34,6 @@ function availableResult(): SoxlAiCurrentExplanationResult {
             supportingEvidence: [point('Supporting text.', ['a', 'b'])],
             conflictingEvidence: [point('Conflicting text.')],
             missingEvidence: [point('Missing text.')],
-            tradePlanExplanation: [],
-            monitoringChanges: [],
             riskReminders: [point('Risk reminder text.')],
             limitations: [point('Limitation text.')],
         },
@@ -85,7 +83,7 @@ describe('buildSoxlAiExplanationView', () => {
         const view = buildSoxlAiExplanationView({
             status: 'unavailable',
             explanation: null,
-            issues: ['rate_limited', 'provider_error', 'invalid_response_shape'],
+            issues: ['rate_limited', 'provider_error', 'missing_required_item_field'],
             retryAfterSeconds: 30,
             snapshotToken: null,
             providerId: null,
@@ -100,7 +98,7 @@ describe('buildSoxlAiExplanationView', () => {
         expect(view.asOfLabel).toBe('Unavailable');
         expect(view.describesCurrentSnapshot).toBe(true);
         expect(view.retryAfterSeconds).toBe(30);
-        expect(view.issues.map((issue) => issue.code)).toEqual(['rate_limited', 'provider_error', 'invalid_response_shape']);
+        expect(view.issues.map((issue) => issue.code)).toEqual(['rate_limited', 'provider_error', 'missing_required_item_field']);
         expect(view.issues.map((issue) => issue.message)).toEqual([
             'Please wait before requesting another explanation.',
             'The AI explanation provider could not complete the request.',
@@ -138,14 +136,27 @@ describe('buildSoxlAiExplanationView', () => {
             'empty_response',
             'response_too_large',
             'invalid_json',
-            'invalid_response_shape',
-            'unexpected_response_key',
+            'root_not_object',
+            'unexpected_top_level_fields',
+            'missing_required_top_level_field',
+            'top_level_field_wrong_type',
+            'section_not_array',
+            'section_item_not_object',
+            'missing_required_item_field',
+            'item_field_wrong_type',
+            'evidence_references_not_array',
+            'evidence_reference_not_string',
+            'nullable_contract_mismatch',
+            'empty_value_not_allowed',
+            'other_shape_mismatch',
             'status_mismatch',
             'snapshot_identity_mismatch',
             'unknown_evidence_reference',
             'ungrounded_numeric_claim',
             'invalid_missing_evidence_reference',
             'uncited_missing_evidence',
+            'forbidden_recommendation',
+            'forbidden_scenario_selection',
             'prohibited_content',
         ] as const satisfies readonly SoxlAiCurrentExplanationIssue[];
         const view = buildSoxlAiExplanationView({
@@ -230,7 +241,7 @@ describe('buildSoxlAiExplanationView', () => {
         'rate_limited',
         'stale_snapshot',
         'provider_error',
-        'invalid_response_shape',
+        'missing_required_item_field',
     ] as const)('does not mark null-token unavailable %s result as earlier', (issue) => {
         const view = buildSoxlAiExplanationView({
             status: 'unavailable',
@@ -238,7 +249,7 @@ describe('buildSoxlAiExplanationView', () => {
             issues: [issue],
             retryAfterSeconds: issue === 'rate_limited' ? 30 : null,
             snapshotToken: null,
-            providerId: issue === 'invalid_response_shape' ? 'gemini' : null,
+            providerId: issue === 'missing_required_item_field' ? 'gemini' : null,
         }, { snapshotToken });
 
         expect(view.describesCurrentSnapshot).toBe(true);

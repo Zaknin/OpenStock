@@ -7,6 +7,7 @@ import {
 import type {
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
+import { soxlAiRequiredTopLevelFields } from './soxl-ai-response-validator';
 
 function evidence(overrides: Partial<SoxlAiEvidencePackage> = {}): SoxlAiEvidencePackage {
     return {
@@ -113,8 +114,6 @@ describe('buildSoxlAiPrompt', () => {
             'supportingEvidence',
             'conflictingEvidence',
             'missingEvidence',
-            'tradePlanExplanation',
-            'monitoringChanges',
             'riskReminders',
             'limitations',
         ]);
@@ -136,12 +135,12 @@ describe('buildSoxlAiPrompt', () => {
         expect(instruction).toContain('Missing-evidence statements must cite the relevant unknown or unavailable evidence item');
     });
 
-    it('separates user assumptions from deterministic calculations and blocks recalculation, live-quote treatment, and external context', () => {
+    it('keeps the response current-only and blocks recalculation, live-quote treatment, and external context', () => {
         const prompt = buildSoxlAiPrompt(evidence());
         const instruction = `${prompt.systemInstruction}\n${prompt.userInstruction}`;
 
-        expect(instruction).toContain('Plan inputs and execution inputs are user-supplied assumptions');
-        expect(instruction).toContain('Deterministic market facts, assessment states, plan calculations, and monitoring calculations are authoritative');
+        expect(prompt.systemInstruction).toContain('Deterministic current market facts and assessment states are authoritative');
+        expect(prompt.systemInstruction).toContain('Do not include trade-plan or monitoring sections');
         expect(instruction).toContain('Never recalculate deterministic arithmetic');
         expect(instruction).toContain('Do not treat completed-candle data as a live quote');
         expect(instruction).toContain('Do not use external news, web knowledge, memory, unstated market data, or hidden application context');
@@ -234,8 +233,6 @@ describe('buildSoxlAiPrompt', () => {
                 supportingEvidence: { type: 'ARRAY' },
                 conflictingEvidence: { type: 'ARRAY' },
                 missingEvidence: { type: 'ARRAY' },
-                tradePlanExplanation: { type: 'ARRAY' },
-                monitoringChanges: { type: 'ARRAY' },
                 riskReminders: { type: 'ARRAY' },
                 limitations: { type: 'ARRAY' },
             },
@@ -246,11 +243,50 @@ describe('buildSoxlAiPrompt', () => {
                 'supportingEvidence',
                 'conflictingEvidence',
                 'missingEvidence',
-                'tradePlanExplanation',
-                'monitoringChanges',
                 'riskReminders',
                 'limitations',
             ],
         });
+    });
+
+    it('keeps schema, validator, nested point, nullable, and empty-array contracts aligned', () => {
+        const schema = soxlAiExplanationResponseJsonSchema;
+        const properties = schema.properties ?? {};
+        const prompt = buildSoxlAiPrompt(evidence());
+        const shapeText = prompt.userInstruction.split('BEGIN_SOXL_EVIDENCE_JSON')[0];
+
+        expect(schema.required).toEqual(soxlAiRequiredTopLevelFields);
+        expect(Object.keys(properties)).toEqual(soxlAiRequiredTopLevelFields);
+        expect(properties.snapshotIdentity).toMatchObject({
+            required: ['providerId', 'asOf'],
+            properties: {
+                providerId: { type: 'STRING', nullable: true },
+                asOf: { type: 'STRING', nullable: true },
+            },
+        });
+
+        const sectionKeys = soxlAiRequiredTopLevelFields.filter((key) => (
+            key !== 'status' && key !== 'snapshotIdentity'
+        ));
+        sectionKeys.forEach((key) => {
+            expect(properties[key]).toMatchObject({
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    required: ['text', 'evidenceIds'],
+                    properties: {
+                        text: { type: 'STRING' },
+                        evidenceIds: { type: 'ARRAY', items: { type: 'STRING' } },
+                    },
+                },
+            });
+            expect(prompt.responseContract[key]).toEqual([]);
+            expect(shapeText).toContain(`\"${key}\"`);
+        });
+
+        expect(Object.keys(properties)).not.toContain('tradePlanExplanation');
+        expect(Object.keys(properties)).not.toContain('monitoringChanges');
+        expect(shapeText).not.toContain('tradePlanExplanation');
+        expect(shapeText).not.toContain('monitoringChanges');
     });
 });

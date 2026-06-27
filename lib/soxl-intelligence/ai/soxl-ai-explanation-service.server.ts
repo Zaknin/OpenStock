@@ -14,6 +14,8 @@ import {
 } from './soxl-ai-prompt';
 import {
     validateSoxlAiExplanationResponse,
+    type SoxlAiResponseValidationFailure,
+    type SoxlAiResponseValidationField,
     type SoxlAiResponseValidationIssue,
 } from './soxl-ai-response-validator';
 
@@ -27,12 +29,7 @@ export type SoxlAiExplanationServiceIssue =
     | 'provider_error'
     | SoxlAiResponseValidationIssue;
 
-export type SoxlAiValidationRejectionReason =
-    | 'invalid_json'
-    | 'response_shape_mismatch'
-    | 'unknown_evidence_reference'
-    | 'ungrounded_numeric_claim'
-    | 'other_validation_failure';
+export type SoxlAiValidationRejectionReason = SoxlAiResponseValidationIssue;
 
 export interface SoxlAiExplanationServiceResult {
     readonly status: SoxlAiExplanationServiceStatus;
@@ -79,34 +76,11 @@ function providerIssue(error: unknown): SoxlAiExplanationServiceIssue {
 }
 
 export function classifySoxlAiValidationRejectionReason(
-    issues: readonly SoxlAiResponseValidationIssue[],
-): SoxlAiValidationRejectionReason {
-    if (issues.includes('invalid_json')) {
-        return 'invalid_json';
-    }
-
-    if (issues.includes('unknown_evidence_reference')) {
-        return 'unknown_evidence_reference';
-    }
-
-    if (issues.includes('ungrounded_numeric_claim')) {
-        return 'ungrounded_numeric_claim';
-    }
-
-    if (issues.some((issue) => (
-        issue === 'invalid_response_shape'
-        || issue === 'unexpected_response_key'
-        || issue === 'status_mismatch'
-        || issue === 'snapshot_identity_mismatch'
-        || issue === 'invalid_missing_evidence_reference'
-        || issue === 'uncited_missing_evidence'
-        || issue === 'empty_response'
-        || issue === 'response_too_large'
-    ))) {
-        return 'response_shape_mismatch';
-    }
-
-    return 'other_validation_failure';
+    validation: SoxlAiResponseValidationFailure,
+): Pick<SoxlAiResponseValidationFailure, 'reason' | 'field'> {
+    return validation.field === undefined
+        ? { reason: validation.reason }
+        : { reason: validation.reason, field: validation.field };
 }
 
 function normalizeProviderResult(
@@ -125,8 +99,10 @@ function normalizeProviderResult(
 function logValidationRejection(
     providerId: string | null,
     reason: SoxlAiValidationRejectionReason,
+    field?: SoxlAiResponseValidationField,
 ): void {
-    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}`);
+    const fieldSuffix = field === undefined ? '' : ` field=${field}`;
+    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}${fieldSuffix}`);
 }
 
 export async function generateSoxlAiExplanation(
@@ -156,10 +132,8 @@ export async function generateSoxlAiExplanation(
     if (!validation.valid) {
         const issues: SoxlAiExplanationServiceIssue[] = [];
         validation.issues.forEach((issue) => addIssue(issues, issue));
-        logValidationRejection(
-            providerResult.providerId,
-            classifySoxlAiValidationRejectionReason(validation.issues),
-        );
+        const rejection = classifySoxlAiValidationRejectionReason(validation);
+        logValidationRejection(providerResult.providerId, rejection.reason, rejection.field);
         return {
             status: 'unavailable',
             explanation: null,

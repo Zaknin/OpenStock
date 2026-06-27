@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-    SoxlAiEvidenceGroups,
-    SoxlAiEvidenceItem,
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
 import type {
@@ -102,8 +100,6 @@ function response(
         supportingEvidence: [],
         conflictingEvidence: [],
         missingEvidence: [],
-        tradePlanExplanation: [],
-        monitoringChanges: [],
         riskReminders: [],
         limitations: [],
         ...overrides,
@@ -114,76 +110,11 @@ function raw(value: unknown): string {
     return JSON.stringify(value);
 }
 
-type ApplicabilityGroup = keyof Pick<
-    SoxlAiEvidenceGroups,
-    'planAssumptions' | 'planCalculations' | 'executionAssumptions' | 'monitoringCalculations'
->;
-
-const applicabilityItems: Record<ApplicabilityGroup, SoxlAiEvidenceItem> = {
-    planAssumptions: {
-        id: 'plan.assumptions.side',
-        source: 'trade_plan',
-        snapshotRole: 'plan_context',
-        sourcePath: 'plan.input.side',
-        label: 'Plan side',
-        trustClass: 'user_supplied_plan_assumption',
-        availability: 'available',
-        value: 'long',
-        unit: null,
-    },
-    planCalculations: {
-        id: 'plan.calculations.maximum_quantity',
-        source: 'trade_plan',
-        snapshotRole: 'plan_context',
-        sourcePath: 'plan.calculation.maximumQuantity',
-        label: 'Maximum quantity',
-        trustClass: 'deterministic_plan_calculation',
-        availability: 'available',
-        value: 10,
-        unit: 'shares',
-    },
-    executionAssumptions: {
-        id: 'monitor.assumptions.entry_price',
-        source: 'live_trade_monitor',
-        snapshotRole: 'monitoring_baseline',
-        sourcePath: 'monitor.input.entryPrice',
-        label: 'Entry price',
-        trustClass: 'user_supplied_execution_assumption',
-        availability: 'available',
-        value: 26.5,
-        unit: 'usd',
-    },
-    monitoringCalculations: {
-        id: 'monitor.calculations.price.current_completed_5m_price',
-        source: 'live_trade_monitor',
-        snapshotRole: 'monitoring_current',
-        sourcePath: 'monitor.priceMonitoring.currentPrice',
-        label: 'Current completed five-minute price',
-        trustClass: 'deterministic_monitoring_calculation',
-        availability: 'available',
-        value: 27,
-        unit: 'usd',
-    },
-};
-
-function evidenceWithApplicability(group: ApplicabilityGroup): SoxlAiEvidencePackage {
-    const base = evidence();
-    const item = applicabilityItems[group];
-
-    return {
-        ...base,
-        items: [...base.items, item],
-        groups: {
-            ...base.groups,
-            [group]: [item.id],
-        },
-    };
-}
-
 function expectIssue(
     value: unknown,
     issue: SoxlAiResponseValidationIssue,
     packageEvidence = evidence(),
+    field?: string,
 ): void {
     const result = validateSoxlAiExplanationResponse(
         typeof value === 'string' ? value : raw(value),
@@ -191,6 +122,10 @@ function expectIssue(
     );
     expect(result.valid).toBe(false);
     expect(result.issues).toContain(issue);
+    expect(result).toMatchObject({ reason: issue });
+    if (field !== undefined) {
+        expect(result).toMatchObject({ field });
+    }
     expect(JSON.stringify(result)).not.toContain('raw-secret');
 }
 
@@ -230,8 +165,10 @@ describe('validateSoxlAiExplanationResponse', () => {
         ['code-fenced JSON', `\`\`\`json\n${raw(response())}\n\`\`\``, 'invalid_json'],
         ['prose before JSON', `Here: ${raw(response())}`, 'invalid_json'],
         ['prose after JSON', `${raw(response())} trailing`, 'invalid_json'],
-        ['array root', [], 'invalid_response_shape'],
-        ['primitive root', 'primitive', 'invalid_json'],
+        ['array root', [], 'root_not_object'],
+        ['string root', raw('primitive'), 'root_not_object'],
+        ['null root', 'null', 'root_not_object'],
+        ['multiple objects', `${raw(response())}${raw(response())}`, 'invalid_json'],
     ] as const)('rejects raw boundary issue: %s', (_name, value, issue) => {
         expectIssue(value, issue);
     });
@@ -241,38 +178,53 @@ describe('validateSoxlAiExplanationResponse', () => {
             const invalid = { ...response() } as Record<string, unknown>;
             delete invalid.summary;
             return invalid;
-        }, 'invalid_response_shape'],
-        ['additional top-level key', () => ({ ...response(), prose: 'extra' }), 'unexpected_response_key'],
-        ['invalid status value', () => ({ ...response(), status: 'done' }), 'invalid_response_shape'],
-        ['status mismatch', () => ({ ...response(), status: 'partial' }), 'status_mismatch'],
-        ['missing snapshot key', () => ({ ...response(), snapshotIdentity: { providerId } }), 'invalid_response_shape'],
-        ['additional snapshot key', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf), extra: true } }), 'invalid_response_shape'],
-        ['provider mismatch', () => ({ ...response(), snapshotIdentity: { providerId: 'other', asOf: String(asOf) } }), 'snapshot_identity_mismatch'],
-        ['asOf mismatch', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf + 1) } }), 'snapshot_identity_mismatch'],
-        ['plan identity cannot replace current identity', () => ({ ...response(), snapshotIdentity: { providerId: 'plan-provider', asOf: String(asOf - 1) } }), 'snapshot_identity_mismatch'],
-    ] as const)('rejects status or snapshot issue: %s', (_name, makeValue, issue) => {
-        expectIssue(makeValue(), issue);
+        }, 'missing_required_top_level_field', 'summary'],
+        ['additional top-level key', () => ({ ...response(), modelGeneratedSecretName: 'extra' }), 'unexpected_top_level_fields', undefined],
+        ['invalid status value', () => ({ ...response(), status: 'done' }), 'top_level_field_wrong_type', 'status'],
+        ['null status', () => ({ ...response(), status: null }), 'nullable_contract_mismatch', 'status'],
+        ['status mismatch', () => ({ ...response(), status: 'partial' }), 'status_mismatch', undefined],
+        ['missing snapshot key', () => ({ ...response(), snapshotIdentity: { providerId } }), 'missing_required_item_field', 'asOf'],
+        ['additional snapshot key', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf), modelProperty: true } }), 'other_shape_mismatch', undefined],
+        ['snapshot wrong type', () => ({ ...response(), snapshotIdentity: [] }), 'top_level_field_wrong_type', 'snapshotIdentity'],
+        ['snapshot null', () => ({ ...response(), snapshotIdentity: null }), 'nullable_contract_mismatch', 'snapshotIdentity'],
+        ['snapshot item wrong type', () => ({ ...response(), snapshotIdentity: { providerId: 4, asOf: String(asOf) } }), 'item_field_wrong_type', 'providerId'],
+        ['provider mismatch', () => ({ ...response(), snapshotIdentity: { providerId: 'other', asOf: String(asOf) } }), 'snapshot_identity_mismatch', undefined],
+        ['asOf mismatch', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf + 1) } }), 'snapshot_identity_mismatch', undefined],
+        ['plan identity cannot replace current identity', () => ({ ...response(), snapshotIdentity: { providerId: 'plan-provider', asOf: String(asOf - 1) } }), 'snapshot_identity_mismatch', undefined],
+    ] as const)('rejects status or snapshot issue: %s', (_name, makeValue, issue, field) => {
+        expectIssue(makeValue(), issue, evidence(), field);
     });
 
     it.each([
-        ['missing section array', () => ({ ...response(), summary: undefined }), 'invalid_response_shape'],
-        ['non-array section', () => ({ ...response(), summary: 'summary' }), 'invalid_response_shape'],
-        ['invalid point shape', () => ({ ...response(), summary: [{ text: 'Only text' }] }), 'invalid_response_shape'],
-        ['additional point key', () => ({ ...response(), summary: [{ ...point('Text'), extra: true }] }), 'invalid_response_shape'],
-        ['blank point text', () => ({ ...response(), summary: [point('   ')] }), 'invalid_response_shape'],
-        ['empty evidence-ID array', () => ({ ...response(), summary: [point('Text', [])] }), 'invalid_response_shape'],
-        ['duplicate ID inside one point', () => ({ ...response(), summary: [point('Text', [availableId, availableId])] }), 'invalid_response_shape'],
-        ['unknown evidence ID', () => ({ ...response(), summary: [point('Text', ['source.path.not.id'])] }), 'unknown_evidence_reference'],
-        ['point-count limit', () => ({ ...response(), summary: Array.from({ length: 51 }, (_, index) => point(`Text ${index}`)) }), 'invalid_response_shape'],
-        ['evidence-ID-count limit', () => ({ ...response(), summary: [point('Text', Array.from({ length: 21 }, (_, index) => `${availableId}.${index}`))] }), 'invalid_response_shape'],
-        ['text-length limit', () => ({ ...response(), summary: [point('x'.repeat(2_001))] }), 'invalid_response_shape'],
-    ] as const)('rejects point-shape issue: %s', (_name, makeValue, issue) => {
-        expectIssue(makeValue(), issue);
+        ['missing section array', () => ({ ...response(), summary: undefined }), 'missing_required_top_level_field', 'summary'],
+        ['section object', () => ({ ...response(), summary: {} }), 'section_not_array', 'summary'],
+        ['null section', () => ({ ...response(), summary: null }), 'nullable_contract_mismatch', 'summary'],
+        ['primitive section item', () => ({ ...response(), summary: ['text'] }), 'section_item_not_object', 'summary'],
+        ['null section item', () => ({ ...response(), summary: [null] }), 'nullable_contract_mismatch', 'summary'],
+        ['missing evidence IDs', () => ({ ...response(), summary: [{ text: 'Only text' }] }), 'missing_required_item_field', 'evidenceIds'],
+        ['additional point key', () => ({ ...response(), summary: [{ ...point('Text'), modelProperty: true }] }), 'other_shape_mismatch', undefined],
+        ['wrong text type', () => ({ ...response(), summary: [{ text: 4, evidenceIds: [availableId] }] }), 'item_field_wrong_type', 'text'],
+        ['null text', () => ({ ...response(), summary: [{ text: null, evidenceIds: [availableId] }] }), 'nullable_contract_mismatch', 'text'],
+        ['blank point text', () => ({ ...response(), summary: [point('   ')] }), 'empty_value_not_allowed', 'text'],
+        ['non-array evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: availableId }] }), 'evidence_references_not_array', 'evidenceIds'],
+        ['non-string evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [4] }] }), 'evidence_reference_not_string', 'evidenceIds'],
+        ['null evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: null }] }), 'nullable_contract_mismatch', 'evidenceIds'],
+        ['empty evidence-ID array', () => ({ ...response(), summary: [point('Text', [])] }), 'empty_value_not_allowed', 'evidenceIds'],
+        ['duplicate ID inside one point', () => ({ ...response(), summary: [point('Text', [availableId, availableId])] }), 'other_shape_mismatch', 'evidenceIds'],
+        ['unknown evidence ID', () => ({ ...response(), summary: [point('Text', ['source.path.not.id'])] }), 'unknown_evidence_reference', 'evidenceIds'],
+        ['point-count limit', () => ({ ...response(), summary: Array.from({ length: 51 }, (_, index) => point(`Text ${index}`)) }), 'other_shape_mismatch', 'summary'],
+        ['evidence-ID-count limit', () => ({ ...response(), summary: [point('Text', Array.from({ length: 21 }, (_, index) => `${availableId}.${index}`))] }), 'other_shape_mismatch', 'evidenceIds'],
+        ['text-length limit', () => ({ ...response(), summary: [point('x'.repeat(2_001))] }), 'other_shape_mismatch', 'text'],
+    ] as const)('rejects point-shape issue: %s', (_name, makeValue, issue, field) => {
+        expectIssue(makeValue(), issue, evidence(), field);
     });
 
     it('validates missing-evidence references and completeness', () => {
         expectIssue(
-            response({ missingEvidence: [point('Available item is not missing.', [availableId])] }),
+            response({
+                status: 'partial',
+                missingEvidence: [point('Available item is not missing.', [availableId])],
+            }),
             'invalid_missing_evidence_reference',
             evidence('partial', [missingId]),
         );
@@ -286,7 +238,7 @@ describe('validateSoxlAiExplanationResponse', () => {
             snapshotIdentity: { providerId: null, asOf: null },
             supportingEvidence: [point('Unsupported.', [missingId])],
             missingEvidence: [point('Missing.', [missingId])],
-        }), 'invalid_response_shape', evidence('unavailable', [missingId], { providerId: null, asOf: null }));
+        }), 'other_shape_mismatch', evidence('unavailable', [missingId], { providerId: null, asOf: null }));
     });
 
     it.each([
@@ -307,9 +259,17 @@ describe('validateSoxlAiExplanationResponse', () => {
         'move the target',
         'place an order',
         'recommended action',
-        'preferred scenario',
         'trade signal',
         'trade decision',
+    ])('rejects recommendation text: %s', (text) => {
+        expectIssue(response({ summary: [point(text)] }), 'forbidden_recommendation');
+    });
+
+    it('rejects preferred-scenario selection separately', () => {
+        expectIssue(response({ summary: [point('preferred scenario')] }), 'forbidden_scenario_selection');
+    });
+
+    it.each([
         'guaranteed outcome',
         'expected win rate',
         'confidence percentage',
@@ -350,41 +310,23 @@ describe('validateSoxlAiExplanationResponse', () => {
         )).toMatchObject({ valid: true });
     });
 
-    it('requires empty trade-plan explanation when plan evidence groups are empty', () => {
-        expectIssue(response({
-            tradePlanExplanation: [point('Plan explanation is not applicable.', [availableId])],
-        }), 'invalid_response_shape', evidence());
-    });
-
-    it('requires empty monitoring changes when monitoring evidence groups are empty', () => {
-        expectIssue(response({
-            monitoringChanges: [point('Monitoring changes are not applicable.', [availableId])],
-        }), 'invalid_response_shape', evidence());
-    });
-
     it.each([
-        'planAssumptions',
-        'planCalculations',
-    ] as const)('permits grounded plan explanation when %s evidence exists', (group) => {
-        const packageEvidence = evidenceWithApplicability(group);
-        const evidenceId = applicabilityItems[group].id;
-        expect(validateSoxlAiExplanationResponse(raw(response({
-            tradePlanExplanation: [point('Plan evidence is grounded.', [evidenceId])],
-        })), packageEvidence)).toMatchObject({ valid: true });
+        ['tradePlanExplanation', [point('Plan content.')]],
+        ['monitoringChanges', [point('Monitor content.')]],
+    ] as const)('rejects removed current-only field %s without retaining its name', (field, value) => {
+        const result = validateSoxlAiExplanationResponse(raw({
+            ...response(),
+            [field]: value,
+        }), evidence());
+
+        expect(result).toMatchObject({
+            valid: false,
+            reason: 'unexpected_top_level_fields',
+        });
+        expect(JSON.stringify(result)).not.toContain(field);
     });
 
-    it.each([
-        'executionAssumptions',
-        'monitoringCalculations',
-    ] as const)('permits grounded monitoring changes when %s evidence exists', (group) => {
-        const packageEvidence = evidenceWithApplicability(group);
-        const evidenceId = applicabilityItems[group].id;
-        expect(validateSoxlAiExplanationResponse(raw(response({
-            monitoringChanges: [point('Monitoring evidence is grounded.', [evidenceId])],
-        })), packageEvidence)).toMatchObject({ valid: true });
-    });
-
-    it('does not let applicability checks affect other grounded sections', () => {
+    it('keeps all current grounded sections available', () => {
         expect(validateSoxlAiExplanationResponse(raw(response({
             summary: [point('Current market summary is grounded.', [availableId])],
             supportingEvidence: [point('Supporting evidence is grounded.', [availableId])],
@@ -392,6 +334,27 @@ describe('validateSoxlAiExplanationResponse', () => {
             riskReminders: [point('Risk reminder is grounded.', [availableId])],
             limitations: [point('Limitation is grounded.', [availableId])],
         })), evidence())).toMatchObject({ valid: true });
+    });
+
+    it('stores only fixed diagnostics and no raw response content', () => {
+        const secretProperty = 'modelSuppliedCredentialBearingProperty';
+        const result = validateSoxlAiExplanationResponse(raw({
+            ...response(),
+            [secretProperty]: 'raw-secret generated prose evidence snapshot-token credential',
+        }), evidence());
+        const serialized = JSON.stringify(result);
+
+        expect(result).toEqual({
+            valid: false,
+            value: null,
+            issues: ['unexpected_top_level_fields'],
+            reason: 'unexpected_top_level_fields',
+        });
+        expect(serialized).not.toContain(secretProperty);
+        expect(serialized).not.toContain('raw-secret');
+        expect(serialized).not.toContain(availableId);
+        expect(serialized).not.toContain('snapshot-token');
+        expect(serialized).not.toContain('credential');
     });
 
     it('does not mutate evidence and produces deterministic validation results', () => {
