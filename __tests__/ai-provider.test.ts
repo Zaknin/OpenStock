@@ -56,8 +56,13 @@ const jsonResponseFormat: AIProviderResponseFormat = {
     type: "OBJECT",
     properties: {
       status: { type: "STRING", enum: ["available", "unavailable"] },
+      evidenceIds: {
+        type: "ARRAY",
+        items: { type: "STRING" },
+        minItems: 1,
+      },
     },
-    required: ["status"],
+    required: ["status", "evidenceIds"],
   },
 };
 

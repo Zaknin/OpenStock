@@ -30,6 +30,7 @@ export interface AIProviderJsonSchema {
   readonly properties?: Readonly<Record<string, AIProviderJsonSchema>>;
   readonly required?: readonly string[];
   readonly items?: AIProviderJsonSchema;
+  readonly minItems?: number;
   readonly enum?: readonly string[];
   readonly nullable?: boolean;
 }

@@ -98,6 +98,7 @@ const evidencePointSchema: AIProviderJsonSchema = {
         evidenceIds: {
             type: 'ARRAY',
             items: { type: 'STRING' },
+            minItems: 1,
         },
     },
     required: ['text', 'evidenceIds'],
@@ -163,6 +164,7 @@ const systemInstruction = [
     'Do not use external news, web knowledge, memory, unstated market data, or hidden application context.',
     'Do not treat completed-candle data as a live quote.',
     'Cite evidence IDs for every factual statement. Every evidence ID you return must exist in evidence.items.',
+    'Every response item must contain at least one evidence ID.',
     'Do not invent source paths, markdown citations, URLs, footnotes, or evidence identifiers.',
     'Do not make a factual numeric statement without an evidence reference.',
     'Missing-evidence statements must cite the relevant unknown or unavailable evidence item.',

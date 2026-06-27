@@ -129,6 +129,7 @@ describe('buildSoxlAiPrompt', () => {
 
         expect(instruction).toContain('Cite evidence IDs for every factual statement');
         expect(instruction).toContain('Every evidence ID you return must exist in evidence.items');
+        expect(instruction).toContain('Every response item must contain at least one evidence ID');
         expect(instruction).toContain('Do not invent source paths');
         expect(instruction).toContain('Do not make a factual numeric statement without an evidence reference');
         expect(instruction).toContain('Never invent, reconstruct, or backfill a missing value');
@@ -276,7 +277,7 @@ describe('buildSoxlAiPrompt', () => {
                     required: ['text', 'evidenceIds'],
                     properties: {
                         text: { type: 'STRING' },
-                        evidenceIds: { type: 'ARRAY', items: { type: 'STRING' } },
+                        evidenceIds: { type: 'ARRAY', items: { type: 'STRING' }, minItems: 1 },
                     },
                 },
             });
