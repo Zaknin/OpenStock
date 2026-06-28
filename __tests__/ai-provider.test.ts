@@ -8,8 +8,10 @@ import {
   callAIProviderWithFallbackDetailed,
   getFallbackProviderName,
   getProviderConfig,
+  type AIProviderJsonSchema,
   type AIProviderResponseFormat,
 } from "@/lib/ai-provider";
+import { buildSoxlAiModelExplanationResponseFormat } from "@/lib/soxl-intelligence/ai/soxl-ai-prompt";
 
 const originalEnv = { ...process.env };
 
@@ -211,7 +213,7 @@ describe("callAIProvider", () => {
     expect(requestBody()).not.toHaveProperty("generationConfig");
   });
 
-  it("adds Gemini JSON output configuration only when a response schema is supplied", async () => {
+  it("adds Gemini JSON schema output configuration only when a response schema is supplied", async () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));
 
@@ -226,9 +228,103 @@ describe("callAIProvider", () => {
       contents: [{ role: "user", parts: [{ text: "user text" }] }],
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: jsonResponseFormat.schema,
+        responseJsonSchema: {
+          type: "object",
+          properties: {
+            status: { type: "string", enum: ["available", "unavailable"] },
+            evidenceIds: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 20,
+            },
+          },
+          required: ["status", "evidenceIds"],
+        },
       },
     });
+    expect(requestBody().generationConfig).not.toHaveProperty("responseSchema");
+  });
+
+  it("passes the actual SOXL schema through the Gemini JSON Schema guard", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));
+
+    await expect(callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseFormat: buildSoxlAiModelExplanationResponseFormat(),
+    }, "gemini")).resolves.toBe('{"status":"available"}');
+
+    const bodyText = JSON.stringify(requestBody());
+    const generationConfig = requestBody().generationConfig as Record<string, unknown>;
+    expect(generationConfig).toHaveProperty("responseMimeType", "application/json");
+    expect(generationConfig).toHaveProperty("responseJsonSchema");
+    expect(generationConfig).not.toHaveProperty("responseSchema");
+    expect(bodyText).not.toMatch(/undefined|E001|current\.market_facts|snapshotToken|providerId|tradePlanExplanation|monitoringChanges/u);
+  });
+
+  it("serializes boolean additionalProperties and omits undefined schema fields", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));
+    const schema = {
+      type: "OBJECT",
+      properties: {
+        status: {
+          type: "STRING",
+          description: undefined,
+        },
+      },
+      additionalProperties: false,
+      required: ["status"],
+    } as unknown as AIProviderJsonSchema;
+
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseFormat: {
+        mimeType: "application/json",
+        schema,
+      },
+    }, "gemini");
+
+    const generationConfig = requestBody().generationConfig as Record<string, unknown>;
+    const serializedBody = JSON.stringify(requestBody());
+    expect(generationConfig.responseJsonSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        status: { type: "string" },
+      },
+    });
+    expect(serializedBody).not.toContain("description");
+    expect(serializedBody).not.toContain("undefined");
+  });
+
+  it("rejects unsupported Gemini schema keywords before fetch", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseFormat: {
+        mimeType: "application/json",
+        schema: {
+          type: "ARRAY",
+          items: { type: "STRING" },
+          uniqueItems: true,
+        } as unknown as AIProviderJsonSchema,
+      },
+    }, "gemini")).rejects.toMatchObject({
+      code: "provider_http_error",
+      providerId: "gemini",
+      category: "structured_schema_invalid",
+      httpStatus: null,
+      message: "AI provider request failed.",
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("uses system and user roles for structured OpenAI-compatible requests", async () => {

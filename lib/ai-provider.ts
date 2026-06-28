@@ -23,17 +23,37 @@ export type AIProviderJsonSchemaType =
   | 'STRING'
   | 'BOOLEAN'
   | 'NUMBER'
-  | 'INTEGER';
+  | 'INTEGER'
+  | 'object'
+  | 'array'
+  | 'string'
+  | 'boolean'
+  | 'number'
+  | 'integer'
+  | 'null';
 
 export interface AIProviderJsonSchema {
-  readonly type: AIProviderJsonSchemaType;
-  readonly properties?: Readonly<Record<string, AIProviderJsonSchema>>;
-  readonly required?: readonly string[];
+  readonly $id?: string;
+  readonly $defs?: Readonly<Record<string, AIProviderJsonSchema>>;
+  readonly $ref?: string;
+  readonly $anchor?: string;
+  readonly type?: AIProviderJsonSchemaType | readonly AIProviderJsonSchemaType[];
+  readonly format?: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly enum?: readonly string[];
   readonly items?: AIProviderJsonSchema;
+  readonly prefixItems?: readonly AIProviderJsonSchema[];
   readonly minItems?: number;
   readonly maxItems?: number;
-  readonly enum?: readonly string[];
-  readonly nullable?: boolean;
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly anyOf?: readonly AIProviderJsonSchema[];
+  readonly oneOf?: readonly AIProviderJsonSchema[];
+  readonly properties?: Readonly<Record<string, AIProviderJsonSchema>>;
+  readonly additionalProperties?: boolean | AIProviderJsonSchema;
+  readonly required?: readonly string[];
+  readonly propertyOrdering?: readonly string[];
 }
 
 export interface AIProviderResponseFormat {
@@ -62,6 +82,7 @@ export type AIProviderFailureCategory =
   | 'rate_limited'
   | 'provider_timeout'
   | 'provider_unavailable'
+  | 'structured_schema_invalid'
   | 'network_error'
   | 'invalid_provider_response'
   | 'unknown_provider_error';
@@ -155,6 +176,132 @@ function providerHttpError(
     category: httpFailureCategory(status, structuredOutputSupplied),
     httpStatus: status,
   });
+}
+
+const geminiJsonSchemaKeywords = new Set([
+  '$id',
+  '$defs',
+  '$ref',
+  '$anchor',
+  'type',
+  'format',
+  'title',
+  'description',
+  'enum',
+  'items',
+  'prefixItems',
+  'minItems',
+  'maxItems',
+  'minimum',
+  'maximum',
+  'anyOf',
+  'oneOf',
+  'properties',
+  'additionalProperties',
+  'required',
+  'propertyOrdering',
+]);
+
+const jsonSchemaTypeMap: Readonly<Record<string, AIProviderJsonSchemaType>> = {
+  OBJECT: 'object',
+  ARRAY: 'array',
+  STRING: 'string',
+  BOOLEAN: 'boolean',
+  NUMBER: 'number',
+  INTEGER: 'integer',
+  object: 'object',
+  array: 'array',
+  string: 'string',
+  boolean: 'boolean',
+  number: 'number',
+  integer: 'integer',
+  null: 'null',
+};
+
+function providerSchemaError(providerId: AIProviderName): AIProviderError {
+  return new AIProviderError('provider_http_error', providerId, {
+    category: 'structured_schema_invalid',
+  });
+}
+
+function normalizeJsonSchemaType(
+  value: AIProviderJsonSchema['type'],
+  providerId: AIProviderName,
+): AIProviderJsonSchema['type'] {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const normalized = jsonSchemaTypeMap[item];
+      if (normalized === undefined) {
+        throw providerSchemaError(providerId);
+      }
+      return normalized;
+    });
+  }
+
+  if (typeof value !== 'string') {
+    throw providerSchemaError(providerId);
+  }
+
+  const normalized = jsonSchemaTypeMap[value];
+  if (normalized === undefined) {
+    throw providerSchemaError(providerId);
+  }
+  return normalized;
+}
+
+function geminiJsonSchema(
+  schema: AIProviderJsonSchema,
+  providerId: AIProviderName,
+): AIProviderJsonSchema {
+  const normalized: Record<string, unknown> = {};
+
+  Object.entries(schema).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+
+    if (!geminiJsonSchemaKeywords.has(key)) {
+      throw providerSchemaError(providerId);
+    }
+
+    switch (key) {
+      case 'type':
+        normalized.type = normalizeJsonSchemaType(value as AIProviderJsonSchema['type'], providerId);
+        break;
+      case '$defs':
+      case 'properties':
+        normalized[key] = Object.fromEntries(
+          Object.entries(value as Readonly<Record<string, AIProviderJsonSchema>>)
+            .map(([propertyKey, propertySchema]) => [
+              propertyKey,
+              geminiJsonSchema(propertySchema, providerId),
+            ]),
+        );
+        break;
+      case 'items':
+        normalized.items = geminiJsonSchema(value as AIProviderJsonSchema, providerId);
+        break;
+      case 'prefixItems':
+      case 'anyOf':
+      case 'oneOf':
+        normalized[key] = (value as readonly AIProviderJsonSchema[])
+          .map((item) => geminiJsonSchema(item, providerId));
+        break;
+      case 'additionalProperties':
+        normalized.additionalProperties = typeof value === 'boolean'
+          ? value
+          : geminiJsonSchema(value as AIProviderJsonSchema, providerId);
+        break;
+      default:
+        normalized[key] = value;
+    }
+  });
+
+  return normalized as AIProviderJsonSchema;
 }
 
 export function getProviderConfig(
@@ -258,7 +405,7 @@ async function fetchWithTimeout(
   }
 }
 
-function geminiBody(request: AIProviderRequest): object {
+function geminiBody(request: AIProviderRequest, providerId: AIProviderName): object {
   if (!isStructuredRequest(request)) {
     return {
       contents: [{ role: 'user', parts: [{ text: request }] }],
@@ -270,7 +417,7 @@ function geminiBody(request: AIProviderRequest): object {
     contents: readonly [{ readonly role: 'user'; readonly parts: readonly [{ readonly text: string }] }];
     generationConfig?: {
       readonly responseMimeType: string;
-      readonly responseSchema: AIProviderJsonSchema;
+      readonly responseJsonSchema: AIProviderJsonSchema;
     };
   } = {
     systemInstruction: {
@@ -282,7 +429,7 @@ function geminiBody(request: AIProviderRequest): object {
   if (request.responseFormat !== undefined) {
     body.generationConfig = {
       responseMimeType: request.responseFormat.mimeType,
-      responseSchema: request.responseFormat.schema,
+      responseJsonSchema: geminiJsonSchema(request.responseFormat.schema, providerId),
     };
   }
 
@@ -314,7 +461,7 @@ async function callGemini(
   const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(geminiBody(request)),
+    body: JSON.stringify(geminiBody(request, config.name)),
   }, config.name);
 
   if (!res.ok) {
