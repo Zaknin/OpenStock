@@ -137,25 +137,33 @@ describe('buildSoxlAiPrompt', () => {
     });
 
     it('places conservative evidence-reference budgets beside the JSON contract', () => {
-        const instruction = promptFor().userInstruction;
+        const prompt = promptFor();
+        const instruction = prompt.userInstruction;
+        const assembledPrompt = `${prompt.systemInstruction}\n${prompt.userInstruction}`;
         const contractIndex = instruction.indexOf('Required machine-readable response shape:');
         const budgetIndex = instruction.indexOf('Evidence-reference budget rules for the JSON response contract:');
         const evidenceIndex = instruction.indexOf('Evidence payload boundary follows.');
+        const finalCheckIndex = instruction.indexOf('Final evidence-reference self-check:');
+        const outputIndex = instruction.indexOf('Now return exactly one valid JSON object');
 
         expect(contractIndex).toBeGreaterThanOrEqual(0);
         expect(budgetIndex).toBeGreaterThan(contractIndex);
         expect(evidenceIndex).toBeGreaterThan(budgetIndex);
-        expect(instruction).toContain('Every evidenceRefs array must contain unique aliases only');
+        expect(finalCheckIndex).toBeGreaterThan(evidenceIndex);
+        expect(outputIndex).toBeGreaterThan(finalCheckIndex);
+        expect(instruction).toContain('For summary.evidenceRefs, output 1 to 8 unique aliases');
+        expect(instruction).toContain('For every other evidenceRefs array, output 1 to 6 unique aliases');
+        expect(instruction).toContain('Never output a ninth summary alias');
+        expect(instruction).toContain('Never output a seventh alias for another item');
+        expect(instruction).toContain('Count the aliases in every evidenceRefs array before returning the JSON');
+        expect(instruction).toContain('remove the least directly relevant aliases before producing the response');
         expect(instruction).toContain('must not repeat an alias within the same array');
-        expect(instruction).toContain('must contain no more than 8 aliases');
         expect(instruction).toContain('only aliases that directly support that specific item');
-        expect(instruction).toContain('summary.evidenceRefs must contain at least 1 and no more than 8 aliases');
         expect(instruction).toContain('Use only the strongest evidence needed to support the summary');
-        expect(instruction).toContain('Every other generated item evidenceRefs array must contain at least 1 and no more than 6 aliases');
         expect(instruction).toContain('Do not cite every available evidence alias');
         expect(instruction).toContain('Do not list the entire evidence catalog');
         expect(instruction).toContain('Select only the smallest set of aliases that directly supports each statement');
-        expect(instruction).toContain('An output that exceeds the specified reference count is invalid');
+        expect(assembledPrompt).not.toMatch(/(?:evidenceRefs[^\n]*20|20[^\n]*evidenceRefs)/u);
         expect(promptFor().systemInstruction).toContain('materially support the specific item that cites it');
     });
 

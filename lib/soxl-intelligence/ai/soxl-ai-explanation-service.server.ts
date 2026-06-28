@@ -19,9 +19,7 @@ import {
 import {
     validateSoxlAiModelExplanation,
     type SoxlAiResponseValidationFailure,
-    type SoxlAiResponseValidationField,
     type SoxlAiResponseValidationIssue,
-    type SoxlAiResponseValidationSection,
 } from './soxl-ai-response-validator';
 
 export type SoxlAiExplanationServiceStatus =
@@ -99,11 +97,26 @@ function logProviderFailure(error: unknown): void {
 
 export function classifySoxlAiValidationRejectionReason(
     validation: SoxlAiResponseValidationFailure,
-): Pick<SoxlAiResponseValidationFailure, 'reason' | 'section' | 'field'> {
+): Pick<
+    SoxlAiResponseValidationFailure,
+    | 'reason'
+    | 'section'
+    | 'field'
+    | 'observedCount'
+    | 'uniqueCount'
+    | 'allowedPromptMaximum'
+    | 'validatorMaximum'
+> {
     return {
         reason: validation.reason,
         ...(validation.section === undefined ? {} : { section: validation.section }),
         ...(validation.field === undefined ? {} : { field: validation.field }),
+        ...(validation.observedCount === undefined ? {} : {
+            observedCount: validation.observedCount,
+            uniqueCount: validation.uniqueCount,
+            allowedPromptMaximum: validation.allowedPromptMaximum,
+            validatorMaximum: validation.validatorMaximum,
+        }),
     };
 }
 
@@ -122,13 +135,14 @@ function normalizeProviderResult(
 
 function logValidationRejection(
     providerId: string | null,
-    reason: SoxlAiValidationRejectionReason,
-    section?: SoxlAiResponseValidationSection,
-    field?: SoxlAiResponseValidationField,
+    rejection: ReturnType<typeof classifySoxlAiValidationRejectionReason>,
 ): void {
-    const sectionSuffix = section === undefined ? '' : ` section=${section}`;
-    const fieldSuffix = field === undefined ? '' : ` field=${field}`;
-    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}${sectionSuffix}${fieldSuffix}`);
+    const sectionSuffix = rejection.section === undefined ? '' : ` section=${rejection.section}`;
+    const fieldSuffix = rejection.field === undefined ? '' : ` field=${rejection.field}`;
+    const countSuffix = rejection.observedCount === undefined
+        ? ''
+        : ` observedCount=${rejection.observedCount} uniqueCount=${rejection.uniqueCount} allowedPromptMaximum=${rejection.allowedPromptMaximum} validatorMaximum=${rejection.validatorMaximum}`;
+    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${rejection.reason}${sectionSuffix}${fieldSuffix}${countSuffix}`);
 }
 
 function trustedSnapshotIdentity(
@@ -187,12 +201,7 @@ export async function generateSoxlAiExplanation(
         const issues: SoxlAiExplanationServiceIssue[] = [];
         validation.issues.forEach((issue) => addIssue(issues, issue));
         const rejection = classifySoxlAiValidationRejectionReason(validation);
-        logValidationRejection(
-            providerResult.providerId,
-            rejection.reason,
-            rejection.section,
-            rejection.field,
-        );
+        logValidationRejection(providerResult.providerId, rejection);
         return {
             status: 'unavailable',
             explanation: null,

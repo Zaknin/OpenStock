@@ -167,6 +167,10 @@ describe('generateSoxlAiExplanation', () => {
         expect(JSON.stringify(request)).not.toMatch(/responseSchema|responseJsonSchema/u);
         expect(request.userInstruction).toContain('"ref": "E001"');
         expect(request.userInstruction).not.toContain(availableId);
+        const assembledPrompt = `${request.systemInstruction}\n${request.userInstruction}`;
+        expect(assembledPrompt).not.toMatch(/(?:evidenceRefs[^\n]*20|20[^\n]*evidenceRefs)/u);
+        expect(request.userInstruction.indexOf('Final evidence-reference self-check:'))
+            .toBeLessThan(request.userInstruction.indexOf('Now return exactly one valid JSON object'));
         expect(JSON.stringify(result)).not.toMatch(/E001|evidenceRefs/u);
     });
 
@@ -349,6 +353,23 @@ describe('generateSoxlAiExplanation', () => {
         expect(warnSpy).toHaveBeenCalledWith(
             'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=section_too_many section=supportingEvidence',
         );
+    });
+
+    it('logs only fixed identifiers and integer counts for evidence-reference count failures', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const input = largeEvidence(21);
+        const refs = Array.from({ length: 21 }, (_, index) => `E${String(index + 1).padStart(3, '0')}`);
+        await generateSoxlAiExplanation({ evidence: input }, {
+            callProvider: providerReturning(JSON.stringify(explanation({
+                summary: [{ text: 'generated prose secret', evidenceRefs: refs }],
+            }))),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=evidence_refs_too_many section=summary field=evidenceRefs observedCount=21 uniqueCount=21 allowedPromptMaximum=8 validatorMaximum=20',
+        );
+        const diagnostic = JSON.stringify(warnSpy.mock.calls);
+        expect(diagnostic).not.toMatch(/E001|generated prose secret|current\.fact\./u);
     });
 
     it('rejects model metadata and never authors trusted identity from model output', async () => {

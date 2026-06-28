@@ -90,6 +90,10 @@ export interface SoxlAiResponseValidationFailure {
     readonly reason: SoxlAiResponseValidationIssue;
     readonly section?: SoxlAiResponseValidationSection;
     readonly field?: SoxlAiResponseValidationField;
+    readonly observedCount?: number;
+    readonly uniqueCount?: number;
+    readonly allowedPromptMaximum?: number;
+    readonly validatorMaximum?: number;
 }
 
 export type SoxlAiResponseValidationResult =
@@ -102,6 +106,10 @@ interface ValidationContext {
         readonly reason: SoxlAiResponseValidationIssue;
         readonly section?: SoxlAiResponseValidationSection;
         readonly field?: SoxlAiResponseValidationField;
+        readonly observedCount?: number;
+        readonly uniqueCount?: number;
+        readonly allowedPromptMaximum?: number;
+        readonly validatorMaximum?: number;
     } | null;
 }
 
@@ -139,11 +147,19 @@ const pointSectionKeys = [
 
 type PointSectionKey = typeof pointSectionKeys[number];
 
+interface EvidenceRefCountDiagnostic {
+    readonly observedCount: number;
+    readonly uniqueCount: number;
+    readonly allowedPromptMaximum: number;
+    readonly validatorMaximum: number;
+}
+
 function addIssue(
     context: ValidationContext,
     issue: SoxlAiResponseValidationIssue,
     field?: SoxlAiResponseValidationField,
     section?: SoxlAiResponseValidationSection,
+    countDiagnostic?: EvidenceRefCountDiagnostic,
 ): void {
     if (!context.issues.includes(issue)) {
         context.issues.push(issue);
@@ -154,6 +170,7 @@ function addIssue(
             reason: issue,
             ...(section === undefined ? {} : { section }),
             ...(field === undefined ? {} : { field }),
+            ...countDiagnostic,
         };
     }
 }
@@ -211,8 +228,23 @@ function validateEvidenceRefs(
         return null;
     }
 
+    const countDiagnostic: EvidenceRefCountDiagnostic = {
+        observedCount: evidenceRefs.length,
+        uniqueCount: new Set(evidenceRefs.filter(
+            (reference): reference is string => typeof reference === 'string',
+        )).size,
+        allowedPromptMaximum: section === 'summary' ? 8 : 6,
+        validatorMaximum: SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT,
+    };
+
     if (evidenceRefs.length > SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT) {
-        addIssue(context, 'evidence_refs_too_many', 'evidenceRefs', section);
+        addIssue(
+            context,
+            'evidence_refs_too_many',
+            'evidenceRefs',
+            section,
+            countDiagnostic,
+        );
         return null;
     }
 
@@ -238,7 +270,13 @@ function validateEvidenceRefs(
         }
 
         if (seen.has(reference)) {
-            addIssue(context, 'evidence_ref_duplicate', 'evidenceRefs', section);
+            addIssue(
+                context,
+                'evidence_ref_duplicate',
+                'evidenceRefs',
+                section,
+                countDiagnostic,
+            );
             valid = false;
             return;
         }
@@ -641,6 +679,12 @@ function failure(context: ValidationContext): SoxlAiResponseValidationFailure {
         reason: diagnostic.reason,
         ...(diagnostic.section === undefined ? {} : { section: diagnostic.section }),
         ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
+        ...(diagnostic.observedCount === undefined ? {} : {
+            observedCount: diagnostic.observedCount,
+            uniqueCount: diagnostic.uniqueCount,
+            allowedPromptMaximum: diagnostic.allowedPromptMaximum,
+            validatorMaximum: diagnostic.validatorMaximum,
+        }),
     };
 }
 

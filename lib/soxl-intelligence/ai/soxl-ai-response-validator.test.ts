@@ -68,6 +68,36 @@ function evidence(
     };
 }
 
+function largeEvidence(count: number): SoxlAiEvidencePackage {
+    const ids = [
+        availableId,
+        ...Array.from({ length: count - 1 }, (_, index) => `current.fact.${index}`),
+    ];
+    return {
+        ...evidence(),
+        items: ids.map((id) => ({
+            id,
+            source: 'market_facts' as const,
+            snapshotRole: 'current' as const,
+            sourcePath: 'facts.value',
+            label: 'Fact',
+            trustClass: 'deterministic_market_fact' as const,
+            availability: 'available' as const,
+            value: 1,
+            unit: null,
+        })),
+        groups: {
+            currentMarketFacts: ids,
+            currentAssessment: [],
+            planAssumptions: [],
+            planCalculations: [],
+            executionAssumptions: [],
+            monitoringCalculations: [],
+            missingEvidence: [],
+        },
+    };
+}
+
 function catalogFor(input: SoxlAiEvidencePackage): SoxlAiEvidenceReferenceCatalog {
     const result = buildSoxlAiEvidenceReferenceCatalog(input);
     if (!result.ok) {
@@ -298,6 +328,54 @@ describe('validateSoxlAiModelExplanation', () => {
             'summary',
             'evidenceRefs',
         );
+    });
+
+    it('reports numeric-only count diagnostics without truncating an over-limit response', () => {
+        const input = largeEvidence(21);
+        const catalog = catalogFor(input);
+        const evidenceRefs = catalog.entries.map(({ alias }) => alias);
+        const result = validateSoxlAiModelExplanation(JSON.stringify(response(catalog, {
+            summary: [{ text: 'Text', evidenceRefs }],
+        })), input, catalog);
+
+        expect(result).toMatchObject({
+            valid: false,
+            value: null,
+            reason: 'evidence_refs_too_many',
+            section: 'summary',
+            field: 'evidenceRefs',
+            observedCount: 21,
+            uniqueCount: 21,
+            allowedPromptMaximum: 8,
+            validatorMaximum: 20,
+        });
+        expect(JSON.stringify(result)).not.toMatch(/E001|current\.fact\./u);
+    });
+
+    it('reports numeric-only duplicate diagnostics without deduplicating the response', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const duplicateAlias = aliasFor(availableId, catalog);
+        const result = validateSoxlAiModelExplanation(JSON.stringify(response(catalog, {
+            supportingEvidence: [{
+                text: 'Text',
+                evidenceRefs: [duplicateAlias, duplicateAlias],
+            }],
+        })), input, catalog);
+
+        expect(result).toMatchObject({
+            valid: false,
+            value: null,
+            reason: 'evidence_ref_duplicate',
+            section: 'supportingEvidence',
+            field: 'evidenceRefs',
+            observedCount: 2,
+            uniqueCount: 1,
+            allowedPromptMaximum: 6,
+            validatorMaximum: 20,
+        });
+        expect(JSON.stringify(result)).not.toContain(duplicateAlias);
+        expect(JSON.stringify(result)).not.toContain(availableId);
     });
 
     it('rejects model-supplied canonical evidenceIds instead of normalizing it', () => {
