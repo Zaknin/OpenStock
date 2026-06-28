@@ -130,7 +130,9 @@ describe('buildSoxlAiPrompt', () => {
 
         expect(instruction).toContain('Cite evidence IDs for every factual statement');
         expect(instruction).toContain('Every evidence ID you return must exist in evidence.items');
-        expect(instruction).toContain('Every response item must contain at least one evidence ID');
+        expect(instruction).toContain('Every factual response item must include the exact property evidenceIds');
+        expect(instruction).toContain('evidenceIds must be a JSON array containing 1 to 20 unique plain string IDs copied exactly from evidence.items');
+        expect(instruction).toContain('Do not return evidence objects, labels in place of IDs, an empty evidenceIds array, duplicate IDs, or invented IDs');
         expect(instruction).toContain('Do not invent source paths');
         expect(instruction).toContain('Do not make a factual numeric statement without an evidence reference');
         expect(instruction).toContain('Never invent, reconstruct, or backfill a missing value');
@@ -268,6 +270,10 @@ describe('buildSoxlAiPrompt', () => {
             expect(prompt.responseContract[key]).toEqual([]);
             expect(shapeText).toContain(`\"${key}\"`);
         });
+
+        const serializedSchema = JSON.stringify(schema);
+        expect(serializedSchema).not.toContain('"evidenceId"');
+        expect(serializedSchema).not.toContain('"evidenceIds":{"type":"OBJECT"');
 
         expect(Object.keys(properties)).not.toContain('tradePlanExplanation');
         expect(Object.keys(properties)).not.toContain('monitoringChanges');

@@ -345,11 +345,11 @@ describe('generateSoxlAiExplanation', () => {
         expect(classifySoxlAiValidationRejectionReason({
             valid: false,
             value: null,
-            issues: ['missing_required_item_field'],
-            reason: 'missing_required_item_field',
+            issues: ['evidence_ids_missing'],
+            reason: 'evidence_ids_missing',
             field: 'evidenceIds',
         })).toEqual({
-            reason: 'missing_required_item_field',
+            reason: 'evidence_ids_missing',
             field: 'evidenceIds',
         });
     });
@@ -381,7 +381,7 @@ describe('generateSoxlAiExplanation', () => {
         });
 
         expect(warnSpy).toHaveBeenCalledWith(
-            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=missing_required_item_field field=evidenceIds',
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=evidence_ids_missing field=evidenceIds',
         );
         expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('Generated prose');
     });

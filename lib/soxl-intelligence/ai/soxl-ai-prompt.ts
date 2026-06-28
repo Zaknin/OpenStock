@@ -63,7 +63,7 @@ const responseShape = {
     statusValues: ['available', 'partial', 'unavailable'],
     evidencePoint: {
         text: 'string',
-        evidenceIds: 'readonly string[]; every id must exist in evidence.items',
+        evidenceIds: 'JSON array containing 1 to 20 unique plain string IDs copied exactly from evidence.items; no objects or labels',
     },
     arrayKeys: [
         'summary',
@@ -142,8 +142,10 @@ const systemInstruction = [
     'Never recalculate deterministic arithmetic or reinterpret direct relations with thresholds that are not present in evidence.',
     'Do not use external news, web knowledge, memory, unstated market data, or hidden application context.',
     'Do not treat completed-candle data as a live quote.',
+    'Every factual response item must include the exact property evidenceIds.',
+    'evidenceIds must be a JSON array containing 1 to 20 unique plain string IDs copied exactly from evidence.items.',
+    'Do not return evidence objects, labels in place of IDs, an empty evidenceIds array, duplicate IDs, or invented IDs.',
     'Cite evidence IDs for every factual statement. Every evidence ID you return must exist in evidence.items.',
-    'Every response item must contain at least one evidence ID.',
     'Do not invent source paths, markdown citations, URLs, footnotes, or evidence identifiers.',
     'Do not make a factual numeric statement without an evidence reference.',
     'Missing-evidence statements must cite the relevant unknown or unavailable evidence item.',

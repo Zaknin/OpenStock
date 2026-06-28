@@ -221,22 +221,61 @@ describe('validateSoxlAiModelExplanation', () => {
         ['null section', () => ({ ...response(), summary: null }), 'nullable_contract_mismatch', 'summary'],
         ['primitive section item', () => ({ ...response(), summary: ['text'] }), 'section_item_not_object', 'summary'],
         ['null section item', () => ({ ...response(), summary: [null] }), 'nullable_contract_mismatch', 'summary'],
-        ['missing evidence IDs', () => ({ ...response(), summary: [{ text: 'Only text' }] }), 'missing_required_item_field', 'evidenceIds'],
+        ['missing evidence IDs', () => ({ ...response(), summary: [{ text: 'Only text' }] }), 'evidence_ids_missing', 'evidenceIds'],
         ['additional point key', () => ({ ...response(), summary: [{ ...point('Text'), modelProperty: true }] }), 'other_shape_mismatch', undefined],
         ['wrong text type', () => ({ ...response(), summary: [{ text: 4, evidenceIds: [availableId] }] }), 'item_field_wrong_type', 'text'],
         ['null text', () => ({ ...response(), summary: [{ text: null, evidenceIds: [availableId] }] }), 'nullable_contract_mismatch', 'text'],
         ['blank point text', () => ({ ...response(), summary: [point('   ')] }), 'empty_value_not_allowed', 'text'],
-        ['non-array evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: availableId }] }), 'evidence_references_not_array', 'evidenceIds'],
-        ['non-string evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [4] }] }), 'evidence_reference_not_string', 'evidenceIds'],
-        ['null evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: null }] }), 'nullable_contract_mismatch', 'evidenceIds'],
-        ['empty evidence-ID array', () => ({ ...response(), summary: [point('Text', [])] }), 'empty_value_not_allowed', 'evidenceIds'],
-        ['duplicate ID inside one point', () => ({ ...response(), summary: [point('Text', [availableId, availableId])] }), 'other_shape_mismatch', 'evidenceIds'],
+        ['string evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: availableId }] }), 'evidence_ids_not_array', 'evidenceIds'],
+        ['object evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: { id: availableId } }] }), 'evidence_ids_not_array', 'evidenceIds'],
+        ['null evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: null }] }), 'evidence_ids_not_array', 'evidenceIds'],
+        ['non-string evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [4] }] }), 'evidence_id_not_string', 'evidenceIds'],
+        ['object evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [{ id: availableId }] }] }), 'evidence_id_not_string', 'evidenceIds'],
+        ['empty evidence-ID array', () => ({ ...response(), summary: [point('Text', [])] }), 'evidence_ids_empty', 'evidenceIds'],
+        ['empty evidence ID', () => ({ ...response(), summary: [point('Text', [''])] }), 'evidence_id_blank', 'evidenceIds'],
+        ['whitespace evidence ID', () => ({ ...response(), summary: [point('Text', ['   '])] }), 'evidence_id_blank', 'evidenceIds'],
+        ['duplicate ID inside one point', () => ({ ...response(), summary: [point('Text', [availableId, availableId])] }), 'evidence_id_duplicate', 'evidenceIds'],
         ['unknown evidence ID', () => ({ ...response(), summary: [point('Text', ['source.path.not.id'])] }), 'unknown_evidence_reference', 'evidenceIds'],
         ['point-count limit', () => ({ ...response(), summary: Array.from({ length: 51 }, (_, index) => point(`Text ${index}`)) }), 'other_shape_mismatch', 'summary'],
-        ['evidence-ID-count limit', () => ({ ...response(), summary: [point('Text', Array.from({ length: 21 }, (_, index) => `${availableId}.${index}`))] }), 'other_shape_mismatch', 'evidenceIds'],
+        ['evidence-ID-count limit', () => ({ ...response(), summary: [point('Text', Array.from({ length: 21 }, (_, index) => `${availableId}.${index}`))] }), 'evidence_ids_too_many', 'evidenceIds'],
         ['text-length limit', () => ({ ...response(), summary: [point('x'.repeat(2_001))] }), 'other_shape_mismatch', 'text'],
     ] as const)('rejects point-shape issue: %s', (_name, makeValue, issue, field) => {
         expectIssue(makeValue(), issue, evidence(), field);
+    });
+
+    it('never classifies a known evidenceIds structural failure as other_shape_mismatch', () => {
+        const invalidValues = [
+            { text: 'Text' },
+            { text: 'Text', evidenceIds: availableId },
+            { text: 'Text', evidenceIds: [] },
+            { text: 'Text', evidenceIds: [4] },
+            { text: 'Text', evidenceIds: [' '] },
+            { text: 'Text', evidenceIds: [availableId, availableId] },
+            { text: 'Text', evidenceIds: Array.from({ length: 21 }, () => availableId) },
+        ];
+
+        invalidValues.forEach((item) => {
+            const result = validateSoxlAiModelExplanation(raw({
+                ...response(),
+                summary: [item],
+            }), evidence());
+            expect(result).toMatchObject({ valid: false, field: 'evidenceIds' });
+            expect(result).not.toMatchObject({ reason: 'other_shape_mismatch' });
+        });
+    });
+
+    it('does not retain an unknown evidence ID in diagnostics', () => {
+        const unknownId = 'unknown.model.supplied.evidence.id';
+        const result = validateSoxlAiModelExplanation(raw(response({
+            summary: [point('Text', [unknownId])],
+        })), evidence());
+
+        expect(result).toMatchObject({
+            valid: false,
+            reason: 'unknown_evidence_reference',
+            field: 'evidenceIds',
+        });
+        expect(JSON.stringify(result)).not.toContain(unknownId);
     });
 
     it('validates missing-evidence references and completeness', () => {

@@ -21,8 +21,13 @@ export type SoxlAiResponseValidationIssue =
     | 'section_item_not_object'
     | 'missing_required_item_field'
     | 'item_field_wrong_type'
-    | 'evidence_references_not_array'
-    | 'evidence_reference_not_string'
+    | 'evidence_ids_missing'
+    | 'evidence_ids_not_array'
+    | 'evidence_ids_empty'
+    | 'evidence_ids_too_many'
+    | 'evidence_id_not_string'
+    | 'evidence_id_blank'
+    | 'evidence_id_duplicate'
     | 'nullable_contract_mismatch'
     | 'empty_value_not_allowed'
     | 'other_shape_mismatch'
@@ -168,54 +173,50 @@ function validateEvidenceIds(
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
 ): evidenceIds is readonly string[] {
-    if (evidenceIds === null) {
-        addIssue(context, 'nullable_contract_mismatch', 'evidenceIds');
-        return false;
-    }
-
     if (!Array.isArray(evidenceIds)) {
-        addIssue(context, 'evidence_references_not_array', 'evidenceIds');
+        addIssue(context, 'evidence_ids_not_array', 'evidenceIds');
         return false;
     }
 
     if (evidenceIds.length === 0) {
-        addIssue(context, 'empty_value_not_allowed', 'evidenceIds');
+        addIssue(context, 'evidence_ids_empty', 'evidenceIds');
         return false;
     }
 
     if (evidenceIds.length > maxEvidenceIdsPerPoint) {
-        addIssue(context, 'other_shape_mismatch', 'evidenceIds');
+        addIssue(context, 'evidence_ids_too_many', 'evidenceIds');
         return false;
     }
 
     const seen = new Set<string>();
     let valid = true;
     evidenceIds.forEach((id) => {
-        if (id === null) {
-            addIssue(context, 'nullable_contract_mismatch', 'evidenceIds');
-            valid = false;
-            return;
-        }
-
         if (typeof id !== 'string') {
-            addIssue(context, 'evidence_reference_not_string', 'evidenceIds');
+            addIssue(context, 'evidence_id_not_string', 'evidenceIds');
             valid = false;
             return;
         }
 
         if (id.trim().length === 0) {
-            addIssue(context, 'empty_value_not_allowed', 'evidenceIds');
+            addIssue(context, 'evidence_id_blank', 'evidenceIds');
             valid = false;
             return;
         }
 
         if (seen.has(id)) {
-            addIssue(context, 'other_shape_mismatch', 'evidenceIds');
+            addIssue(context, 'evidence_id_duplicate', 'evidenceIds');
             valid = false;
             return;
         }
 
         seen.add(id);
+    });
+
+    if (!valid) {
+        return false;
+    }
+
+    evidenceIds.forEach((id) => {
         if (!validEvidenceIds.has(id)) {
             addIssue(context, 'unknown_evidence_reference', 'evidenceIds');
             valid = false;
@@ -250,6 +251,11 @@ function validatePoint(
     const expectedKeys = ['text', 'evidenceIds'] as const;
     if (Object.keys(value).some((key) => !expectedKeys.includes(key as typeof expectedKeys[number]))) {
         addIssue(context, 'other_shape_mismatch');
+        return null;
+    }
+
+    if (!Object.hasOwn(value, 'evidenceIds')) {
+        addIssue(context, 'evidence_ids_missing', 'evidenceIds');
         return null;
     }
 
