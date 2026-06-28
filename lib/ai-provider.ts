@@ -10,6 +10,7 @@ export interface AIProviderConfig {
 export interface AIProviderStructuredRequest {
   readonly systemInstruction: string;
   readonly userInstruction: string;
+  readonly responseMimeType?: AIProviderResponseFormat['mimeType'];
   readonly responseFormat?: AIProviderResponseFormat;
   readonly timeoutMs?: number;
 }
@@ -557,7 +558,7 @@ function geminiBody(request: AIProviderRequest, providerId: AIProviderName): obj
     contents: readonly [{ readonly role: 'user'; readonly parts: readonly [{ readonly text: string }] }];
     generationConfig?: {
       readonly responseMimeType: string;
-      readonly responseJsonSchema: AIProviderJsonSchema;
+      readonly responseJsonSchema?: AIProviderJsonSchema;
     };
   } = {
     systemInstruction: {
@@ -570,6 +571,10 @@ function geminiBody(request: AIProviderRequest, providerId: AIProviderName): obj
     body.generationConfig = {
       responseMimeType: request.responseFormat.mimeType,
       responseJsonSchema: geminiJsonSchema(request.responseFormat.schema, providerId),
+    };
+  } else if (request.responseMimeType !== undefined) {
+    body.generationConfig = {
+      responseMimeType: request.responseMimeType,
     };
   }
 

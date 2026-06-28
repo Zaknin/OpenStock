@@ -252,6 +252,28 @@ describe("callAIProvider", () => {
     expect(requestBody().generationConfig).not.toHaveProperty("responseSchema");
   });
 
+  it("supports Gemini JSON MIME mode without serializing response schema fields", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));
+
+    await expect(callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseMimeType: "application/json",
+    }, "gemini")).resolves.toBe('{"status":"available"}');
+
+    expect(requestBody()).toEqual({
+      systemInstruction: { parts: [{ text: "system text" }] },
+      contents: [{ role: "user", parts: [{ text: "user text" }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    });
+    const serializedBody = JSON.stringify(requestBody());
+    expect(serializedBody).not.toContain("responseSchema");
+    expect(serializedBody).not.toContain("responseJsonSchema");
+  });
+
   it("passes the actual SOXL schema through the Gemini JSON Schema guard", async () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
     vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody('{"status":"available"}'))));

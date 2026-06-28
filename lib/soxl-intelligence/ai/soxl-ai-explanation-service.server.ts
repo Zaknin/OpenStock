@@ -14,7 +14,6 @@ import {
 } from './soxl-ai-evidence-reference-catalog.server';
 import {
     buildSoxlAiPrompt,
-    buildSoxlAiModelExplanationResponseFormat,
     type SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
 import {
@@ -158,7 +157,6 @@ export async function generateSoxlAiExplanation(
         };
     }
 
-    const responseFormat = buildSoxlAiModelExplanationResponseFormat();
     const prompt = buildSoxlAiPrompt(input.evidence, catalogResult.catalog);
     const callProvider = dependencies.callProvider ?? defaultProviderCall;
 
@@ -167,7 +165,7 @@ export async function generateSoxlAiExplanation(
         providerResult = normalizeProviderResult(await callProvider({
             systemInstruction: prompt.systemInstruction,
             userInstruction: prompt.userInstruction,
-            responseFormat,
+            responseMimeType: 'application/json',
             timeoutMs: SOXL_AI_PROVIDER_TIMEOUT_MS,
         }));
     } catch (error) {

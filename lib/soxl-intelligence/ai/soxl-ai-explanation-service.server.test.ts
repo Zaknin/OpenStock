@@ -162,29 +162,11 @@ describe('generateSoxlAiExplanation', () => {
         expect(callProvider).toHaveBeenCalledTimes(1);
         const request = callProvider.mock.calls[0][0];
         expect(request.timeoutMs).toBe(AI_PROVIDER_MAX_TIMEOUT_MS);
+        expect(request.responseMimeType).toBe('application/json');
+        expect(request.responseFormat).toBeUndefined();
+        expect(JSON.stringify(request)).not.toMatch(/responseSchema|responseJsonSchema/u);
         expect(request.userInstruction).toContain('"ref": "E001"');
         expect(request.userInstruction).not.toContain(availableId);
-        expect(request.responseFormat).toMatchObject({
-            mimeType: 'application/json',
-            schema: {
-                properties: {
-                    supportingEvidence: {
-                        type: 'ARRAY',
-                        maxItems: 50,
-                        items: {
-                            required: ['text', 'evidenceRefs'],
-                            properties: {
-                                evidenceRefs: {
-                                    minItems: 1,
-                                    maxItems: 20,
-                                    items: { type: 'STRING' },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        });
         expect(JSON.stringify(result)).not.toMatch(/E001|evidenceRefs/u);
     });
 
