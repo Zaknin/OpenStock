@@ -31,6 +31,7 @@ export interface AIProviderJsonSchema {
   readonly required?: readonly string[];
   readonly items?: AIProviderJsonSchema;
   readonly minItems?: number;
+  readonly maxItems?: number;
   readonly enum?: readonly string[];
   readonly nullable?: boolean;
 }

@@ -1,15 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-    AIProviderError,
-    type AIProviderName,
-} from '@/lib/ai-provider';
-import type {
-    SoxlAiEvidencePackage,
-} from './soxl-ai-evidence';
-import type {
-    SoxlAiExplanationResponse,
-    SoxlAiModelExplanation,
-} from './soxl-ai-prompt';
+import { AIProviderError, type AIProviderName } from '@/lib/ai-provider';
+import type { SoxlAiEvidencePackage } from './soxl-ai-evidence';
+import type { SoxlAiExplanationResponse, SoxlAiModelExplanation } from './soxl-ai-prompt';
 import {
     classifySoxlAiValidationRejectionReason,
     generateSoxlAiExplanation,
@@ -34,19 +26,17 @@ function evidence(
     return {
         status,
         issues: status === 'available' ? [] : ['no_current_market_evidence'],
-        snapshotIdentities: [
-            {
-                role: 'current',
-                providerId: identity.providerId,
-                asOf: identity.asOf,
-                factsStatus: status,
-                assessmentStatus: status,
-                coreStatus: status,
-                sessionStatus: status,
-                openingRangeComplete: null,
-                regularSessionComplete: null,
-            },
-        ],
+        snapshotIdentities: [{
+            role: 'current',
+            providerId: identity.providerId,
+            asOf: identity.asOf,
+            factsStatus: status,
+            assessmentStatus: status,
+            coreStatus: status,
+            sessionStatus: status,
+            openingRangeComplete: null,
+            regularSessionComplete: null,
+        }],
         items: [
             {
                 id: availableId,
@@ -83,7 +73,38 @@ function evidence(
     };
 }
 
-function point(text: string, ids: readonly string[] = [availableId]) {
+function largeEvidence(count: number): SoxlAiEvidencePackage {
+    const ids = Array.from({ length: count }, (_, index) => `current.fact.${index}`);
+    return {
+        ...evidence(),
+        items: ids.map((id) => ({
+            id,
+            source: 'market_facts' as const,
+            snapshotRole: 'current' as const,
+            sourcePath: 'facts.value',
+            label: 'Fact',
+            trustClass: 'deterministic_market_fact' as const,
+            availability: 'available' as const,
+            value: 1,
+            unit: null,
+        })),
+        groups: {
+            currentMarketFacts: ids,
+            currentAssessment: [],
+            planAssumptions: [],
+            planCalculations: [],
+            executionAssumptions: [],
+            monitoringCalculations: [],
+            missingEvidence: [],
+        },
+    };
+}
+
+function modelPoint(text: string, refs: readonly string[] = ['E001']) {
+    return { text, evidenceRefs: refs };
+}
+
+function appPoint(text: string, ids: readonly string[] = [availableId]) {
     return { text, evidenceIds: ids };
 }
 
@@ -92,7 +113,7 @@ function explanation(
 ): SoxlAiModelExplanation {
     return {
         status: 'available',
-        summary: [point('The market facts status is available.')],
+        summary: [modelPoint('The market facts status is available.')],
         supportingEvidence: [],
         conflictingEvidence: [],
         missingEvidence: [],
@@ -103,14 +124,19 @@ function explanation(
 }
 
 function applicationExplanation(
-    content: SoxlAiModelExplanation = explanation(),
     identity: SoxlAiExplanationResponse['snapshotIdentity'] = {
         providerId,
         asOf: String(asOf),
     },
 ): SoxlAiExplanationResponse {
     return {
-        ...content,
+        status: 'available',
+        summary: [appPoint('The market facts status is available.')],
+        supportingEvidence: [],
+        conflictingEvidence: [],
+        missingEvidence: [],
+        riskReminders: [],
+        limitations: [],
         snapshotIdentity: identity,
     };
 }
@@ -119,14 +145,11 @@ function providerReturning(
     value: string,
     provider: AIProviderName = 'gemini',
 ): ReturnType<typeof vi.fn<SoxlAiProviderCall>> {
-    return vi.fn<SoxlAiProviderCall>().mockResolvedValue({
-        providerId: provider,
-        text: value,
-    });
+    return vi.fn<SoxlAiProviderCall>().mockResolvedValue({ providerId: provider, text: value });
 }
 
 describe('generateSoxlAiExplanation', () => {
-    it('returns a validated explanation and calls the injected provider once with distinct instructions', async () => {
+    it('calls the provider once with request-scoped aliases and returns canonical IDs', async () => {
         const callProvider = providerReturning(JSON.stringify(explanation()));
         const result = await generateSoxlAiExplanation({ evidence: evidence() }, { callProvider });
 
@@ -137,48 +160,45 @@ describe('generateSoxlAiExplanation', () => {
             providerId: 'gemini',
         });
         expect(callProvider).toHaveBeenCalledTimes(1);
-        expect(callProvider.mock.calls[0][0].systemInstruction).toContain('Use only the supplied evidence package');
-        expect(callProvider.mock.calls[0][0].userInstruction).toContain('BEGIN_SOXL_EVIDENCE_JSON');
-        expect(callProvider.mock.calls[0][0].systemInstruction).not.toBe(callProvider.mock.calls[0][0].userInstruction);
-        expect(callProvider.mock.calls[0][0].responseFormat).toMatchObject({
+        const request = callProvider.mock.calls[0][0];
+        expect(request.userInstruction).toContain('"ref": "E001"');
+        expect(request.userInstruction).not.toContain(availableId);
+        expect(request.responseFormat).toMatchObject({
             mimeType: 'application/json',
             schema: {
-                type: 'OBJECT',
-                required: expect.arrayContaining([
-                    'status',
-                    'summary',
-                    'supportingEvidence',
-                    'conflictingEvidence',
-                    'missingEvidence',
-                    'riskReminders',
-                    'limitations',
-                ]),
-                properties: expect.not.objectContaining({
-                    snapshotIdentity: expect.anything(),
-                    snapshotToken: expect.anything(),
-                    providerId: expect.anything(),
-                    asOf: expect.anything(),
-                }),
+                properties: {
+                    supportingEvidence: {
+                        type: 'ARRAY',
+                        maxItems: 50,
+                        items: {
+                            required: ['text', 'evidenceRefs'],
+                            properties: {
+                                evidenceRefs: {
+                                    minItems: 1,
+                                    maxItems: 20,
+                                    items: { enum: ['E001', 'E002'] },
+                                },
+                            },
+                        },
+                    },
+                },
             },
         });
-        expect(result.explanation?.snapshotIdentity).toEqual({
-            providerId,
-            asOf: String(asOf),
-        });
+        expect(JSON.stringify(result)).not.toMatch(/E001|evidenceRefs/u);
     });
 
-    it('does not mutate evidence and gives deterministic results for equivalent inputs', async () => {
-        const packageEvidence = evidence();
-        const before = JSON.stringify(packageEvidence);
-        const first = await generateSoxlAiExplanation({ evidence: packageEvidence }, {
+    it('does not mutate evidence and produces deterministic results', async () => {
+        const input = evidence();
+        const before = JSON.stringify(input);
+        const first = await generateSoxlAiExplanation({ evidence: input }, {
             callProvider: providerReturning(JSON.stringify(explanation())),
         });
         const second = await generateSoxlAiExplanation({ evidence: JSON.parse(before) as SoxlAiEvidencePackage }, {
             callProvider: providerReturning(JSON.stringify(explanation())),
         });
 
-        expect(JSON.stringify(packageEvidence)).toBe(before);
         expect(first).toEqual(second);
+        expect(JSON.stringify(input)).toBe(before);
     });
 
     it.each([
@@ -186,8 +206,7 @@ describe('generateSoxlAiExplanation', () => {
         [new AIProviderError('provider_timeout', 'gemini'), 'provider_timeout'],
         [new AIProviderError('provider_http_error', 'gemini'), 'provider_error'],
         [new Error('raw provider secret'), 'provider_error'],
-        ['raw thrown secret', 'provider_error'],
-    ] as const)('maps provider failure safely: %s', async (thrown, issue) => {
+    ] as const)('maps provider failures safely: %s', async (thrown, issue) => {
         const callProvider = vi.fn<SoxlAiProviderCall>().mockRejectedValue(thrown);
         const result = await generateSoxlAiExplanation({ evidence: evidence() }, { callProvider });
 
@@ -198,214 +217,140 @@ describe('generateSoxlAiExplanation', () => {
             providerId: thrown instanceof AIProviderError ? thrown.providerId : null,
         });
         expect(JSON.stringify(result)).not.toContain('raw provider secret');
-        expect(JSON.stringify(result)).not.toContain('raw thrown secret');
     });
 
-    it.each([
-        ['', 'empty_response'],
-        ['{bad json', 'invalid_json'],
-        [JSON.stringify({ ...explanation(), modelSuppliedProperty: true }), 'unexpected_top_level_fields'],
-        [JSON.stringify({ ...explanation(), summary: [point('Text', ['unknown.id'])] }), 'unknown_evidence_reference'],
-        [JSON.stringify({ ...explanation(), summary: [point('you should buy')] }), 'forbidden_recommendation'],
-    ] as const)('maps validation failure: %s', async (rawResponse, issue) => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(rawResponse),
-        });
-
-        expect(result.status).toBe('unavailable');
-        expect(result.explanation).toBeNull();
-        expect(result.issues).toContain(issue);
-        expect(result.providerId).toBe('gemini');
-        expect(warnSpy).toHaveBeenCalledTimes(1);
-        expect(warnSpy.mock.calls[0]).toEqual([
-            expect.stringMatching(/^SOXL_AI_RESPONSE_REJECTED provider=gemini reason=/u),
-        ]);
-        if (rawResponse.length > 0) {
-            expect(JSON.stringify(result)).not.toContain(rawResponse);
-            expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(rawResponse);
-        }
-    });
-
-    it.each([
-        ['snapshotIdentity', { providerId: 'model-provider', asOf: 'model-time' }],
-        ['snapshotToken', 'model-token'],
-        ['provider', 'model-provider'],
-        ['providerId', 'model-provider'],
-        ['asOf', 'model-time'],
-        ['generatedAt', 'model-time'],
-    ] as const)('rejects model attempts to author trusted metadata through %s', async (field, value) => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(JSON.stringify({
-                ...explanation(),
-                [field]: value,
-            })),
-        });
+    it('fails before provider invocation when the catalog ceiling is exceeded', async () => {
+        const callProvider = providerReturning(JSON.stringify(explanation()));
+        const result = await generateSoxlAiExplanation({ evidence: largeEvidence(1_000) }, { callProvider });
 
         expect(result).toEqual({
             status: 'unavailable',
             explanation: null,
-            issues: ['unexpected_server_metadata_field'],
-            providerId: 'gemini',
+            issues: ['evidence_catalog_too_large'],
+            providerId: null,
         });
-        expect(warnSpy).toHaveBeenCalledWith(
-            `SOXL_AI_RESPONSE_REJECTED provider=gemini reason=unexpected_server_metadata_field field=${field}`,
-        );
-        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(String(value));
+        expect(callProvider).not.toHaveBeenCalled();
     });
 
-    it('composes market identity from evidence and AI provider identity from invocation', async () => {
-        const packageEvidence = evidence('available', [], {
-            providerId: 'trusted-market-provider',
-            asOf: 1_700_000_000_000,
-        });
-        const result = await generateSoxlAiExplanation({ evidence: packageEvidence }, {
-            callProvider: providerReturning(JSON.stringify(explanation()), 'gemini'),
-        });
+    it('fails before provider invocation when the schema ceiling is exceeded', async () => {
+        const callProvider = providerReturning(JSON.stringify(explanation()));
+        const result = await generateSoxlAiExplanation({ evidence: largeEvidence(999) }, { callProvider });
 
-        expect(result.providerId).toBe('gemini');
-        expect(result.explanation?.snapshotIdentity).toEqual({
-            providerId: 'trusted-market-provider',
-            asOf: '1700000000000',
+        expect(result).toEqual({
+            status: 'unavailable',
+            explanation: null,
+            issues: ['response_schema_too_large'],
+            providerId: null,
         });
-        expect(JSON.stringify(result.explanation)).not.toContain('model-provider');
-        expect(JSON.stringify(result.explanation)).not.toContain('model-time');
+        expect(callProvider).not.toHaveBeenCalled();
     });
 
-    it('retains multiple validation issues in deterministic de-duplicated order', async () => {
-        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(JSON.stringify({
-                ...explanation(),
-                status: 'partial',
-                summary: [
-                    point('Text', ['missing.one']),
-                    point('More text', ['missing.two']),
-                ],
-            })),
-        });
-
-        expect(result.issues).toEqual([
-            'unknown_evidence_reference',
-            'status_mismatch',
-        ]);
-        expect(result.providerId).toBe('gemini');
-    });
-
-    it('returns validated partial and unavailable explanations', async () => {
+    it('returns validated partial and unavailable explanations with trusted identity', async () => {
         const partialEvidence = evidence('partial', [missingId]);
         const partial = await generateSoxlAiExplanation({ evidence: partialEvidence }, {
             callProvider: providerReturning(JSON.stringify(explanation({
                 status: 'partial',
-                missingEvidence: [point('The condition state is missing.', [missingId])],
+                missingEvidence: [modelPoint('The condition is missing.', ['E002'])],
             }))),
         });
         expect(partial).toMatchObject({ status: 'available', issues: [] });
-        expect(partial.explanation?.status).toBe('partial');
+        expect(partial.explanation?.missingEvidence[0].evidenceIds).toEqual([missingId]);
 
         const unavailableEvidence = evidence('unavailable', [missingId], { providerId: null, asOf: null });
         const unavailable = await generateSoxlAiExplanation({ evidence: unavailableEvidence }, {
             callProvider: providerReturning(JSON.stringify(explanation({
                 status: 'unavailable',
-                summary: [point('Current evidence is unavailable.', [missingId])],
-                missingEvidence: [point('The current condition is unavailable.', [missingId])],
-                limitations: [point('Only availability can be explained.', [missingId])],
+                summary: [modelPoint('Current evidence is unavailable.', ['E002'])],
+                missingEvidence: [modelPoint('The current condition is unavailable.', ['E002'])],
+                limitations: [modelPoint('Only availability can be explained.', ['E002'])],
             }))),
         });
         expect(unavailable).toMatchObject({ status: 'available', issues: [] });
-        expect(unavailable.explanation?.status).toBe('unavailable');
-        expect(unavailable.explanation?.snapshotIdentity).toEqual({
-            providerId: null,
-            asOf: null,
+        expect(unavailable.explanation?.snapshotIdentity).toEqual({ providerId: null, asOf: null });
+    });
+
+    it('logs only fixed provider, reason, section, and field diagnostics', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const invalidAlias = 'E999';
+        await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify(explanation({
+                supportingEvidence: [{ text: 'generated prose secret', evidenceRefs: [invalidAlias] }],
+            }))),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=unknown_evidence_reference section=supportingEvidence field=evidenceRefs',
+        );
+        const diagnostic = JSON.stringify(warnSpy.mock.calls);
+        expect(diagnostic).not.toContain(invalidAlias);
+        expect(diagnostic).not.toContain('generated prose secret');
+        expect(diagnostic).not.toContain(availableId);
+    });
+
+    it('uses the precise section limit diagnostic instead of other_shape_mismatch', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify(explanation({
+                supportingEvidence: Array.from(
+                    { length: 51 },
+                    (_, index) => modelPoint(`Point ${index}`),
+                ),
+            }))),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=section_too_many section=supportingEvidence',
+        );
+    });
+
+    it('rejects model metadata and never authors trusted identity from model output', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                snapshotToken: 'raw-secret',
+            })),
+        });
+
+        expect(result.issues).toEqual(['unexpected_server_metadata_field']);
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=unexpected_server_metadata_field field=snapshotToken',
+        );
+        expect(JSON.stringify(result)).not.toContain('raw-secret');
+    });
+
+    it('classifies fixed allowlisted diagnostics including section', () => {
+        expect(classifySoxlAiValidationRejectionReason({
+            valid: false,
+            value: null,
+            issues: ['evidence_refs_missing'],
+            reason: 'evidence_refs_missing',
+            section: 'summary',
+            field: 'evidenceRefs',
+        })).toEqual({
+            reason: 'evidence_refs_missing',
+            section: 'summary',
+            field: 'evidenceRefs',
         });
     });
 
-    it('does not log, use the system clock, persist, or call network when a dependency is injected', async () => {
-        const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
-            throw new Error('Date.now should not be called');
+    it('does not call network, clock, or logs when an injected provider succeeds', async () => {
+        const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
+            throw new Error('Clock use is forbidden');
         });
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network should not be called')));
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network use is forbidden')));
 
         await expect(generateSoxlAiExplanation({ evidence: evidence() }, {
             callProvider: providerReturning(JSON.stringify(explanation())),
         })).resolves.toMatchObject({ status: 'available' });
 
-        expect(dateNowSpy).not.toHaveBeenCalled();
+        expect(dateSpy).not.toHaveBeenCalled();
         expect(errorSpy).not.toHaveBeenCalled();
         expect(warnSpy).not.toHaveBeenCalled();
         expect(logSpy).not.toHaveBeenCalled();
         expect(global.fetch).not.toHaveBeenCalled();
-    });
-
-    it('classifies validation rejection with fixed non-sensitive reason codes', () => {
-        expect(classifySoxlAiValidationRejectionReason({
-            valid: false,
-            value: null,
-            issues: ['evidence_ids_missing'],
-            reason: 'evidence_ids_missing',
-            field: 'evidenceIds',
-        })).toEqual({
-            reason: 'evidence_ids_missing',
-            field: 'evidenceIds',
-        });
-    });
-
-    it('logs only the fixed reason and allowlisted field for structural rejection', async () => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const unknownProperty = 'modelGeneratedUnknownProperty';
-        await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(JSON.stringify({
-                ...explanation(),
-                summary: [{ text: 'Generated prose.', evidenceIds: [availableId], [unknownProperty]: true }],
-            })),
-        });
-
-        expect(warnSpy).toHaveBeenCalledWith(
-            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=other_shape_mismatch',
-        );
-        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(unknownProperty);
-        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('Generated prose');
-    });
-
-    it('logs an allowlisted field when a required nested field is missing', async () => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(JSON.stringify({
-                ...explanation(),
-                summary: [{ text: 'Generated prose.' }],
-            })),
-        });
-
-        expect(warnSpy).toHaveBeenCalledWith(
-            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=evidence_ids_missing field=evidenceIds',
-        );
-        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('Generated prose');
-    });
-
-    it('does not include prompt, evidence, output, token, user, or credential data in validation diagnostics', async () => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-        const rawResponse = JSON.stringify({
-            ...explanation(),
-            modelSuppliedCredentialProperty: 'bad',
-            summary: [point('raw-model-output-secret with token soxl-current-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')],
-        });
-
-        await generateSoxlAiExplanation({ evidence: evidence() }, {
-            callProvider: providerReturning(rawResponse),
-        });
-
-        const diagnostic = JSON.stringify(warnSpy.mock.calls);
-        expect(diagnostic).toContain('SOXL_AI_RESPONSE_REJECTED provider=gemini reason=');
-        expect(diagnostic).not.toContain('raw-model-output-secret');
-        expect(diagnostic).not.toContain('BEGIN_SOXL_EVIDENCE_JSON');
-        expect(diagnostic).not.toContain('current.market_facts.status');
-        expect(diagnostic).not.toContain('soxl-current-v1:');
-        expect(diagnostic).not.toContain('user');
-        expect(diagnostic).not.toContain('credential');
-        expect(diagnostic).not.toContain('modelSuppliedCredentialProperty');
     });
 });

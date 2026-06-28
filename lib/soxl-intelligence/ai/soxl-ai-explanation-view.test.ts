@@ -83,7 +83,7 @@ describe('buildSoxlAiExplanationView', () => {
         const view = buildSoxlAiExplanationView({
             status: 'unavailable',
             explanation: null,
-            issues: ['rate_limited', 'provider_error', 'missing_required_item_field'],
+            issues: ['rate_limited', 'provider_error', 'section_item_missing_required_field'],
             retryAfterSeconds: 30,
             snapshotToken: null,
             providerId: null,
@@ -98,7 +98,7 @@ describe('buildSoxlAiExplanationView', () => {
         expect(view.asOfLabel).toBe('Unavailable');
         expect(view.describesCurrentSnapshot).toBe(true);
         expect(view.retryAfterSeconds).toBe(30);
-        expect(view.issues.map((issue) => issue.code)).toEqual(['rate_limited', 'provider_error', 'missing_required_item_field']);
+        expect(view.issues.map((issue) => issue.code)).toEqual(['rate_limited', 'provider_error', 'section_item_missing_required_field']);
         expect(view.issues.map((issue) => issue.message)).toEqual([
             'Please wait before requesting another explanation.',
             'The AI explanation provider could not complete the request.',
@@ -141,17 +141,24 @@ describe('buildSoxlAiExplanationView', () => {
             'unexpected_top_level_fields',
             'missing_required_top_level_field',
             'top_level_field_wrong_type',
+            'section_missing',
             'section_not_array',
+            'section_too_many',
             'section_item_not_object',
-            'missing_required_item_field',
-            'item_field_wrong_type',
-            'evidence_ids_missing',
-            'evidence_ids_not_array',
-            'evidence_ids_empty',
-            'evidence_ids_too_many',
-            'evidence_id_not_string',
-            'evidence_id_blank',
-            'evidence_id_duplicate',
+            'section_item_missing_required_field',
+            'section_item_field_wrong_type',
+            'section_item_unexpected_field',
+            'other_section_shape_mismatch',
+            'evidence_refs_missing',
+            'evidence_refs_not_array',
+            'evidence_refs_empty',
+            'evidence_refs_too_many',
+            'evidence_ref_not_string',
+            'evidence_ref_blank',
+            'evidence_ref_format_invalid',
+            'evidence_ref_duplicate',
+            'evidence_catalog_too_large',
+            'response_schema_too_large',
             'nullable_contract_mismatch',
             'empty_value_not_allowed',
             'other_shape_mismatch',
@@ -246,7 +253,7 @@ describe('buildSoxlAiExplanationView', () => {
         'rate_limited',
         'stale_snapshot',
         'provider_error',
-        'missing_required_item_field',
+        'section_item_missing_required_field',
     ] as const)('does not mark null-token unavailable %s result as earlier', (issue) => {
         const view = buildSoxlAiExplanationView({
             status: 'unavailable',
@@ -254,7 +261,7 @@ describe('buildSoxlAiExplanationView', () => {
             issues: [issue],
             retryAfterSeconds: issue === 'rate_limited' ? 30 : null,
             snapshotToken: null,
-            providerId: issue === 'missing_required_item_field' ? 'gemini' : null,
+            providerId: issue === 'section_item_missing_required_field' ? 'gemini' : null,
         }, { snapshotToken });
 
         expect(view.describesCurrentSnapshot).toBe(true);

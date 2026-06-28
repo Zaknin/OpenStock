@@ -60,6 +60,7 @@ const jsonResponseFormat: AIProviderResponseFormat = {
         type: "ARRAY",
         items: { type: "STRING" },
         minItems: 1,
+        maxItems: 20,
       },
     },
     required: ["status", "evidenceIds"],

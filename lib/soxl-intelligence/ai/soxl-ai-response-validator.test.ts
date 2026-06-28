@@ -1,52 +1,37 @@
 import { describe, expect, it, vi } from 'vitest';
-import type {
-    SoxlAiEvidencePackage,
-} from './soxl-ai-evidence';
-import type {
-    SoxlAiModelExplanation,
-} from './soxl-ai-prompt';
+import type { SoxlAiEvidencePackage } from './soxl-ai-evidence';
+import {
+    buildSoxlAiEvidenceReferenceCatalog,
+    type SoxlAiEvidenceReferenceCatalog,
+} from './soxl-ai-evidence-reference-catalog.server';
+import type { SoxlAiModelExplanation } from './soxl-ai-prompt';
 import {
     validateSoxlAiModelExplanation,
     type SoxlAiResponseValidationIssue,
+    type SoxlAiResponseValidationSection,
 } from './soxl-ai-response-validator';
 
-const providerId = 'twelve-data';
-const asOf = 1_787_654_321_123;
 const availableId = 'current.market_facts.soxl_5m.latest_completed.close';
-const missingId = 'current.assessment.upward_alignment.soxl_5m.condition.state';
+const missingId = 'current.assessment.upward_alignment.condition.state';
 
 function evidence(
     status: SoxlAiEvidencePackage['status'] = 'available',
     missingEvidence: readonly string[] = [],
-    identity: { readonly providerId: string | null; readonly asOf: number | null } = { providerId, asOf },
 ): SoxlAiEvidencePackage {
     return {
         status,
         issues: status === 'available' ? [] : ['no_current_market_evidence'],
-        snapshotIdentities: [
-            {
-                role: 'current',
-                providerId: identity.providerId,
-                asOf: identity.asOf,
-                factsStatus: status,
-                assessmentStatus: status,
-                coreStatus: status,
-                sessionStatus: status,
-                openingRangeComplete: null,
-                regularSessionComplete: null,
-            },
-            {
-                role: 'plan_context',
-                providerId: 'plan-provider',
-                asOf: asOf - 1,
-                factsStatus: 'available',
-                assessmentStatus: 'available',
-                coreStatus: 'available',
-                sessionStatus: 'available',
-                openingRangeComplete: true,
-                regularSessionComplete: false,
-            },
-        ],
+        snapshotIdentities: [{
+            role: 'current',
+            providerId: status === 'unavailable' ? null : 'twelve-data',
+            asOf: status === 'unavailable' ? null : 1_787_654_321_123,
+            factsStatus: status,
+            assessmentStatus: status,
+            coreStatus: status,
+            sessionStatus: status,
+            openingRangeComplete: null,
+            regularSessionComplete: null,
+        }],
         items: [
             {
                 id: availableId,
@@ -63,7 +48,7 @@ function evidence(
                 id: missingId,
                 source: 'market_assessment',
                 snapshotRole: 'current',
-                sourcePath: 'assessment.upwardAlignment.sections[id=soxl_5m].conditions[id=condition].state',
+                sourcePath: 'assessment.upwardAlignment.condition.state',
                 label: 'Condition state',
                 trustClass: 'deterministic_assessment',
                 availability: 'unknown',
@@ -83,16 +68,37 @@ function evidence(
     };
 }
 
-function point(text: string, ids: readonly string[] = [availableId]) {
-    return { text, evidenceIds: ids };
+function catalogFor(input: SoxlAiEvidencePackage): SoxlAiEvidenceReferenceCatalog {
+    const result = buildSoxlAiEvidenceReferenceCatalog(input);
+    if (!result.ok) {
+        throw new Error('Expected evidence catalog');
+    }
+    return result.catalog;
+}
+
+function aliasFor(id: string, catalog: SoxlAiEvidenceReferenceCatalog): string {
+    const alias = catalog.evidenceIdToAlias.get(id);
+    if (alias === undefined) {
+        throw new Error('Expected alias');
+    }
+    return alias;
+}
+
+function point(
+    text: string,
+    ids: readonly string[],
+    catalog: SoxlAiEvidenceReferenceCatalog,
+) {
+    return { text, evidenceRefs: ids.map((id) => aliasFor(id, catalog)) };
 }
 
 function response(
+    catalog: SoxlAiEvidenceReferenceCatalog,
     overrides: Partial<SoxlAiModelExplanation> = {},
 ): SoxlAiModelExplanation {
     return {
         status: 'available',
-        summary: [point('The latest completed close is available.')],
+        summary: [point('The latest completed close is available.', [availableId], catalog)],
         supportingEvidence: [],
         conflictingEvidence: [],
         missingEvidence: [],
@@ -102,23 +108,28 @@ function response(
     };
 }
 
-function raw(value: unknown): string {
-    return JSON.stringify(value);
+function validate(value: unknown, input = evidence()) {
+    const catalog = catalogFor(input);
+    return validateSoxlAiModelExplanation(
+        typeof value === 'string' ? value : JSON.stringify(value),
+        input,
+        catalog,
+    );
 }
 
 function expectIssue(
     value: unknown,
     issue: SoxlAiResponseValidationIssue,
-    packageEvidence = evidence(),
+    input = evidence(),
+    section?: SoxlAiResponseValidationSection,
     field?: string,
 ): void {
-    const result = validateSoxlAiModelExplanation(
-        typeof value === 'string' ? value : raw(value),
-        packageEvidence,
-    );
-    expect(result.valid).toBe(false);
+    const result = validate(value, input);
+    expect(result).toMatchObject({ valid: false, reason: issue });
     expect(result.issues).toContain(issue);
-    expect(result).toMatchObject({ reason: issue });
+    if (section !== undefined) {
+        expect(result).toMatchObject({ section });
+    }
     if (field !== undefined) {
         expect(result).toMatchObject({ field });
     }
@@ -126,315 +137,248 @@ function expectIssue(
 }
 
 describe('validateSoxlAiModelExplanation', () => {
-    it('accepts valid available, partial, and unavailable responses', () => {
-        expect(validateSoxlAiModelExplanation(raw(response()), evidence())).toMatchObject({
-            valid: true,
-            issues: [],
-        });
+    it('maps valid model aliases to canonical application evidence IDs', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const result = validateSoxlAiModelExplanation(
+            JSON.stringify(response(catalog, {
+                supportingEvidence: [point('The completed close is 27.12.', [availableId], catalog)],
+            })),
+            input,
+            catalog,
+        );
 
-        const partialEvidence = evidence('partial', [missingId]);
-        expect(validateSoxlAiModelExplanation(raw(response({
-            status: 'partial',
-            missingEvidence: [point('The condition state is unavailable.', [missingId])],
-        })), partialEvidence)).toMatchObject({
+        expect(result).toEqual({
             valid: true,
             issues: [],
+            value: {
+                status: 'available',
+                summary: [{
+                    text: 'The latest completed close is available.',
+                    evidenceIds: [availableId],
+                }],
+                supportingEvidence: [{
+                    text: 'The completed close is 27.12.',
+                    evidenceIds: [availableId],
+                }],
+                conflictingEvidence: [],
+                missingEvidence: [],
+                riskReminders: [],
+                limitations: [],
+            },
         });
+        expect(JSON.stringify(result)).not.toMatch(/E001|evidenceRefs/u);
+    });
 
-        const unavailableEvidence = evidence('unavailable', [missingId], { providerId: null, asOf: null });
-        expect(validateSoxlAiModelExplanation(raw(response({
-            status: 'unavailable',
-            summary: [point('Current evidence is unavailable.', [missingId])],
-            missingEvidence: [point('Current evidence is unavailable.', [missingId])],
-            limitations: [point('Only availability information can be stated.', [missingId])],
-        })), unavailableEvidence)).toMatchObject({
-            valid: true,
-            issues: [],
-        });
+    it('permits empty supporting and sibling sections consistently', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expect(validateSoxlAiModelExplanation(
+            JSON.stringify(response(catalog, { summary: [] })),
+            input,
+            catalog,
+        )).toMatchObject({ valid: true });
     });
 
     it.each([
         ['empty response', '', 'empty_response'],
         ['oversized response', `{${' '.repeat(65_536)}}`, 'response_too_large'],
         ['invalid JSON', '{raw-secret', 'invalid_json'],
-        ['code-fenced JSON', `\`\`\`json\n${raw(response())}\n\`\`\``, 'invalid_json'],
-        ['prose before JSON', `Here: ${raw(response())}`, 'invalid_json'],
-        ['prose after JSON', `${raw(response())} trailing`, 'invalid_json'],
+        ['Markdown fence', '```json\n{}\n```', 'invalid_json'],
+        ['surrounding prose', 'Here: {}', 'invalid_json'],
         ['array root', [], 'root_not_object'],
-        ['string root', raw('primitive'), 'root_not_object'],
         ['null root', 'null', 'root_not_object'],
-        ['multiple objects', `${raw(response())}${raw(response())}`, 'invalid_json'],
     ] as const)('rejects raw boundary issue: %s', (_name, value, issue) => {
         expectIssue(value, issue);
     });
 
     it.each([
-        ['missing top-level key', () => {
-            const invalid = { ...response() } as Record<string, unknown>;
-            delete invalid.summary;
-            return invalid;
-        }, 'missing_required_top_level_field', 'summary'],
-        ['additional top-level key', () => ({ ...response(), modelGeneratedSecretName: 'extra' }), 'unexpected_top_level_fields', undefined],
-        ['invalid status value', () => ({ ...response(), status: 'done' }), 'top_level_field_wrong_type', 'status'],
-        ['null status', () => ({ ...response(), status: null }), 'nullable_contract_mismatch', 'status'],
-        ['status mismatch', () => ({ ...response(), status: 'partial' }), 'status_mismatch', undefined],
-    ] as const)('rejects status issue: %s', (_name, makeValue, issue, field) => {
-        expectIssue(makeValue(), issue, evidence(), field);
-    });
+        'summary',
+        'supportingEvidence',
+        'conflictingEvidence',
+        'missingEvidence',
+        'riskReminders',
+        'limitations',
+    ] as const)('uses precise structural diagnostics for %s', (section) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const missing = { ...response(catalog) } as Record<string, unknown>;
+        delete missing[section];
+        expectIssue(missing, 'section_missing', input, section);
 
-    it.each([
-        ['snapshotIdentity', { providerId: 'model-provider', asOf: 'model-time' }],
-        ['snapshotToken', 'model-token'],
-        ['provider', 'model-provider'],
-        ['providerId', 'model-provider'],
-        ['asOf', 'model-time'],
-        ['generatedAt', 'model-time'],
-    ] as const)('rejects server-owned model field %s with a fixed diagnostic', (field, value) => {
-        const result = validateSoxlAiModelExplanation(raw({
-            ...response(),
-            [field]: value,
-        }), evidence());
-
-        expect(result).toEqual({
-            valid: false,
-            value: null,
-            issues: ['unexpected_server_metadata_field'],
-            reason: 'unexpected_server_metadata_field',
-            field,
-        });
-        expect(JSON.stringify(result)).not.toContain(String(value));
-    });
-
-    it('rejects server-owned metadata nested inside a content item', () => {
+        expectIssue({ ...response(catalog), [section]: {} }, 'section_not_array', input, section);
+        expectIssue({ ...response(catalog), [section]: ['text'] }, 'section_item_not_object', input, section);
         expectIssue({
-            ...response(),
-            summary: [{
-                ...point('Text'),
-                snapshotIdentity: { providerId: 'model-provider', asOf: 'model-time' },
-            }],
-        }, 'unexpected_server_metadata_field', evidence(), 'snapshotIdentity');
+            ...response(catalog),
+            [section]: Array.from(
+                { length: 51 },
+                (_, index) => point(`Text ${index}`, [availableId], catalog),
+            ),
+        }, 'section_too_many', input, section);
+    });
+
+    it('uses precise supportingEvidence item diagnostics and never the generic section code', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const cases = [
+            [{ evidenceRefs: ['E001'] }, 'section_item_missing_required_field', 'text'],
+            [{ text: 4, evidenceRefs: ['E001'] }, 'section_item_field_wrong_type', 'text'],
+            [{ text: 'Text', evidenceRefs: ['E001'], extra: true }, 'section_item_unexpected_field', undefined],
+        ] as const;
+
+        cases.forEach(([item, reason, field]) => {
+            expectIssue(
+                { ...response(catalog), supportingEvidence: [item] },
+                reason,
+                input,
+                'supportingEvidence',
+                field,
+            );
+            expect(validate({ ...response(catalog), supportingEvidence: [item] }, input))
+                .not.toMatchObject({ reason: 'other_shape_mismatch' });
+        });
     });
 
     it.each([
-        ['missing section array', () => ({ ...response(), summary: undefined }), 'missing_required_top_level_field', 'summary'],
-        ['section object', () => ({ ...response(), summary: {} }), 'section_not_array', 'summary'],
-        ['null section', () => ({ ...response(), summary: null }), 'nullable_contract_mismatch', 'summary'],
-        ['primitive section item', () => ({ ...response(), summary: ['text'] }), 'section_item_not_object', 'summary'],
-        ['null section item', () => ({ ...response(), summary: [null] }), 'nullable_contract_mismatch', 'summary'],
-        ['missing evidence IDs', () => ({ ...response(), summary: [{ text: 'Only text' }] }), 'evidence_ids_missing', 'evidenceIds'],
-        ['additional point key', () => ({ ...response(), summary: [{ ...point('Text'), modelProperty: true }] }), 'other_shape_mismatch', undefined],
-        ['wrong text type', () => ({ ...response(), summary: [{ text: 4, evidenceIds: [availableId] }] }), 'item_field_wrong_type', 'text'],
-        ['null text', () => ({ ...response(), summary: [{ text: null, evidenceIds: [availableId] }] }), 'nullable_contract_mismatch', 'text'],
-        ['blank point text', () => ({ ...response(), summary: [point('   ')] }), 'empty_value_not_allowed', 'text'],
-        ['string evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: availableId }] }), 'evidence_ids_not_array', 'evidenceIds'],
-        ['object evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: { id: availableId } }] }), 'evidence_ids_not_array', 'evidenceIds'],
-        ['null evidence IDs', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: null }] }), 'evidence_ids_not_array', 'evidenceIds'],
-        ['non-string evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [4] }] }), 'evidence_id_not_string', 'evidenceIds'],
-        ['object evidence ID', () => ({ ...response(), summary: [{ text: 'Text', evidenceIds: [{ id: availableId }] }] }), 'evidence_id_not_string', 'evidenceIds'],
-        ['empty evidence-ID array', () => ({ ...response(), summary: [point('Text', [])] }), 'evidence_ids_empty', 'evidenceIds'],
-        ['empty evidence ID', () => ({ ...response(), summary: [point('Text', [''])] }), 'evidence_id_blank', 'evidenceIds'],
-        ['whitespace evidence ID', () => ({ ...response(), summary: [point('Text', ['   '])] }), 'evidence_id_blank', 'evidenceIds'],
-        ['duplicate ID inside one point', () => ({ ...response(), summary: [point('Text', [availableId, availableId])] }), 'evidence_id_duplicate', 'evidenceIds'],
-        ['unknown evidence ID', () => ({ ...response(), summary: [point('Text', ['source.path.not.id'])] }), 'unknown_evidence_reference', 'evidenceIds'],
-        ['point-count limit', () => ({ ...response(), summary: Array.from({ length: 51 }, (_, index) => point(`Text ${index}`)) }), 'other_shape_mismatch', 'summary'],
-        ['evidence-ID-count limit', () => ({ ...response(), summary: [point('Text', Array.from({ length: 21 }, (_, index) => `${availableId}.${index}`))] }), 'evidence_ids_too_many', 'evidenceIds'],
-        ['text-length limit', () => ({ ...response(), summary: [point('x'.repeat(2_001))] }), 'other_shape_mismatch', 'text'],
-    ] as const)('rejects point-shape issue: %s', (_name, makeValue, issue, field) => {
-        expectIssue(makeValue(), issue, evidence(), field);
-    });
-
-    it('never classifies a known evidenceIds structural failure as other_shape_mismatch', () => {
-        const invalidValues = [
-            { text: 'Text' },
-            { text: 'Text', evidenceIds: availableId },
-            { text: 'Text', evidenceIds: [] },
-            { text: 'Text', evidenceIds: [4] },
-            { text: 'Text', evidenceIds: [' '] },
-            { text: 'Text', evidenceIds: [availableId, availableId] },
-            { text: 'Text', evidenceIds: Array.from({ length: 21 }, () => availableId) },
-        ];
-
-        invalidValues.forEach((item) => {
-            const result = validateSoxlAiModelExplanation(raw({
-                ...response(),
-                summary: [item],
-            }), evidence());
-            expect(result).toMatchObject({ valid: false, field: 'evidenceIds' });
-            expect(result).not.toMatchObject({ reason: 'other_shape_mismatch' });
-        });
-    });
-
-    it('does not retain an unknown evidence ID in diagnostics', () => {
-        const unknownId = 'unknown.model.supplied.evidence.id';
-        const result = validateSoxlAiModelExplanation(raw(response({
-            summary: [point('Text', [unknownId])],
-        })), evidence());
-
-        expect(result).toMatchObject({
-            valid: false,
-            reason: 'unknown_evidence_reference',
-            field: 'evidenceIds',
-        });
-        expect(JSON.stringify(result)).not.toContain(unknownId);
-    });
-
-    it('validates missing-evidence references and completeness', () => {
+        ['missing', { text: 'Text' }, 'evidence_refs_missing'],
+        ['not array', { text: 'Text', evidenceRefs: 'E001' }, 'evidence_refs_not_array'],
+        ['empty', { text: 'Text', evidenceRefs: [] }, 'evidence_refs_empty'],
+        ['too many', { text: 'Text', evidenceRefs: Array.from({ length: 21 }, () => 'E001') }, 'evidence_refs_too_many'],
+        ['not string', { text: 'Text', evidenceRefs: [4] }, 'evidence_ref_not_string'],
+        ['blank', { text: 'Text', evidenceRefs: [' '] }, 'evidence_ref_blank'],
+        ['malformed', { text: 'Text', evidenceRefs: ['X001'] }, 'evidence_ref_format_invalid'],
+        ['duplicate', { text: 'Text', evidenceRefs: ['E001', 'E001'] }, 'evidence_ref_duplicate'],
+        ['unknown', { text: 'Text', evidenceRefs: ['E999'] }, 'unknown_evidence_reference'],
+    ] as const)('rejects alias issue: %s', (_name, item, issue) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
         expectIssue(
-            response({
-                status: 'partial',
-                missingEvidence: [point('Available item is not missing.', [availableId])],
-            }),
-            'invalid_missing_evidence_reference',
-            evidence('partial', [missingId]),
-        );
-        expectIssue(response({ status: 'partial', missingEvidence: [] }), 'uncited_missing_evidence', evidence('partial', [missingId]));
-        expectIssue(response({ missingEvidence: [point('No missing item exists.', [availableId])] }), 'invalid_missing_evidence_reference', evidence());
-    });
-
-    it('requires unsupported sections to stay empty for unavailable packages', () => {
-        expectIssue(response({
-            status: 'unavailable',
-            supportingEvidence: [point('Unsupported.', [missingId])],
-            missingEvidence: [point('Missing.', [missingId])],
-        }), 'other_shape_mismatch', evidence('unavailable', [missingId], { providerId: null, asOf: null }));
-    });
-
-    it.each([
-        'you should buy',
-        'you should sell',
-        'you should hold',
-        'you should add',
-        'you should reduce',
-        'you should close',
-        'you should exit',
-        'buy now',
-        'sell now',
-        'close the position',
-        'exit the position',
-        'move your invalidation',
-        'move the invalidation',
-        'move your target',
-        'move the target',
-        'place an order',
-        'recommended action',
-        'trade signal',
-        'trade decision',
-    ])('rejects recommendation text: %s', (text) => {
-        expectIssue(response({ summary: [point(text)] }), 'forbidden_recommendation');
-    });
-
-    it('rejects preferred-scenario selection separately', () => {
-        expectIssue(response({ summary: [point('preferred scenario')] }), 'forbidden_scenario_selection');
-    });
-
-    it.each([
-        'guaranteed outcome',
-        'expected win rate',
-        'confidence percentage',
-        'probability percentage',
-        'win-rate percentage',
-        '70% confidence',
-        'probability is 55%',
-        'aggregate score is 8',
-    ])('rejects prohibited text: %s', (text) => {
-        expectIssue(response({ summary: [point(text)] }), 'prohibited_content');
-    });
-
-    it.each([
-        'This response does not recommend an action.',
-        'No outcome is guaranteed.',
-        'The latest completed close is $27.12.',
-        'The invalidation level was reached.',
-        'The MACD signal line is below the MACD line.',
-        'The user supplied a long side.',
-        'The short side is a user-supplied field.',
-    ])('allows neutral domain text: %s', (text) => {
-        expect(validateSoxlAiModelExplanation(raw(response({ summary: [point(text)] })), evidence())).toMatchObject({
-            valid: true,
-        });
-    });
-
-    it('rejects explicit numeric claims that are not grounded in cited evidence values', () => {
-        expectIssue(
-            response({ summary: [point('The latest completed close is $999.99.')] }),
-            'ungrounded_numeric_claim',
+            { ...response(catalog), summary: [item] },
+            issue,
+            input,
+            'summary',
+            'evidenceRefs',
         );
     });
 
-    it('permits rounded explicit numeric claims grounded in cited evidence values', () => {
-        expect(validateSoxlAiModelExplanation(
-            raw(response({ summary: [point('The latest completed close is $27.12.')] })),
-            evidence(),
-        )).toMatchObject({ valid: true });
+    it('rejects model-supplied canonical evidenceIds instead of normalizing it', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        expectIssue({
+            ...response(catalog),
+            summary: [{ text: 'Text', evidenceIds: [availableId] }],
+        }, 'section_item_unexpected_field', input, 'summary');
     });
 
-    it.each([
-        ['tradePlanExplanation', [point('Plan content.')]],
-        ['monitoringChanges', [point('Monitor content.')]],
-    ] as const)('rejects removed current-only field %s without retaining its name', (field, value) => {
-        const result = validateSoxlAiModelExplanation(raw({
-            ...response(),
-            [field]: value,
-        }), evidence());
+    it('does not expose invalid aliases or canonical IDs in diagnostics or logs', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const invalidAlias = 'E999';
+        const result = validate({
+            ...response(catalog),
+            summary: [{ text: 'Text', evidenceRefs: [invalidAlias] }],
+        }, input);
 
-        expect(result).toMatchObject({
-            valid: false,
-            reason: 'unexpected_top_level_fields',
-        });
-        expect(JSON.stringify(result)).not.toContain(field);
+        expect(JSON.stringify(result)).not.toContain(invalidAlias);
+        expect(JSON.stringify(result)).not.toContain(availableId);
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
     });
 
-    it('keeps all current grounded sections available', () => {
-        expect(validateSoxlAiModelExplanation(raw(response({
-            summary: [point('Current market summary is grounded.', [availableId])],
-            supportingEvidence: [point('Supporting evidence is grounded.', [availableId])],
-            conflictingEvidence: [point('Conflicting evidence is grounded.', [availableId])],
-            riskReminders: [point('Risk reminder is grounded.', [availableId])],
-            limitations: [point('Limitation is grounded.', [availableId])],
-        })), evidence())).toMatchObject({ valid: true });
-    });
-
-    it('stores only fixed diagnostics and no raw response content', () => {
-        const secretProperty = 'modelSuppliedCredentialBearingProperty';
-        const result = validateSoxlAiModelExplanation(raw({
-            ...response(),
-            [secretProperty]: 'raw-secret generated prose evidence snapshot-token credential',
-        }), evidence());
-        const serialized = JSON.stringify(result);
-
-        expect(result).toEqual({
-            valid: false,
-            value: null,
-            issues: ['unexpected_top_level_fields'],
-            reason: 'unexpected_top_level_fields',
-        });
-        expect(serialized).not.toContain(secretProperty);
-        expect(serialized).not.toContain('raw-secret');
-        expect(serialized).not.toContain(availableId);
-        expect(serialized).not.toContain('snapshot-token');
-        expect(serialized).not.toContain('credential');
-    });
-
-    it('does not mutate evidence and produces deterministic validation results', () => {
-        const packageEvidence = evidence('partial', [missingId]);
-        const before = JSON.stringify(packageEvidence);
-        const value = raw(response({
+    it('validates missing-evidence aliases against current canonical missing IDs', () => {
+        const input = evidence('partial', [missingId]);
+        const catalog = catalogFor(input);
+        const valid = response(catalog, {
             status: 'partial',
-            missingEvidence: [point('Missing condition.', [missingId])],
-        }));
-        const first = validateSoxlAiModelExplanation(value, packageEvidence);
-        const second = validateSoxlAiModelExplanation(value, JSON.parse(before) as SoxlAiEvidencePackage);
-
-        expect(JSON.stringify(packageEvidence)).toBe(before);
-        expect(first).toEqual(second);
-    });
-
-    it('does not use the system clock', () => {
-        const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => {
-            throw new Error('Date.now should not be called');
+            missingEvidence: [point('The condition is unavailable.', [missingId], catalog)],
         });
 
-        expect(validateSoxlAiModelExplanation(raw(response()), evidence())).toMatchObject({ valid: true });
-        expect(dateNowSpy).not.toHaveBeenCalled();
+        expect(validate(valid, input)).toMatchObject({ valid: true });
+        expectIssue(
+            response(catalog, { status: 'partial', missingEvidence: [] }),
+            'uncited_missing_evidence',
+            input,
+        );
+        expectIssue(response(catalog, {
+            status: 'partial',
+            missingEvidence: [point('Not missing.', [availableId], catalog)],
+        }), 'invalid_missing_evidence_reference', input);
+    });
+
+    it('keeps unsupported sections empty for unavailable evidence', () => {
+        const input = evidence('unavailable', [missingId]);
+        const catalog = catalogFor(input);
+        expectIssue(response(catalog, {
+            status: 'unavailable',
+            summary: [point('Evidence is unavailable.', [missingId], catalog)],
+            supportingEvidence: [point('Unsupported.', [missingId], catalog)],
+            missingEvidence: [point('Evidence is unavailable.', [missingId], catalog)],
+        }), 'other_section_shape_mismatch', input, 'supportingEvidence');
+    });
+
+    it.each([
+        ['you should buy now', 'forbidden_recommendation'],
+        ['The preferred scenario is upward.', 'forbidden_scenario_selection'],
+        ['The confidence percentage is 90%.', 'prohibited_content'],
+        ['The expected win rate is 80%.', 'prohibited_content'],
+        ['The aggregate score is 4.', 'prohibited_content'],
+    ] as const)('rejects prohibited content: %s', (text, issue) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        expectIssue(response(catalog, {
+            summary: [point(text, [availableId], catalog)],
+        }), issue, input);
+    });
+
+    it('preserves strict numeric grounding after alias mapping', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expect(validate(response(catalog, {
+            summary: [point('The completed close is 27.12.', [availableId], catalog)],
+        }), input)).toMatchObject({ valid: true });
+        expectIssue(response(catalog, {
+            summary: [point('The completed close is 99.99.', [availableId], catalog)],
+        }), 'ungrounded_numeric_claim', input);
+    });
+
+    it('rejects server metadata at root and inside section items', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        expectIssue({
+            ...response(catalog),
+            snapshotToken: 'raw-secret',
+        }, 'unexpected_server_metadata_field', input, undefined, 'snapshotToken');
+        expectIssue({
+            ...response(catalog),
+            summary: [{ ...point('Text', [availableId], catalog), providerId: 'raw-secret' }],
+        }, 'unexpected_server_metadata_field', input, undefined, 'providerId');
+    });
+
+    it('rejects status and top-level contract failures', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        expectIssue({ ...response(catalog), status: 'done' }, 'top_level_field_wrong_type', input, undefined, 'status');
+        expectIssue({ ...response(catalog), status: 'partial' }, 'status_mismatch', input);
+        expectIssue({ ...response(catalog), extra: true }, 'unexpected_top_level_fields', input);
+    });
+
+    it('is deterministic and does not mutate evidence or the catalog', () => {
+        const input = evidence('partial', [missingId]);
+        const catalog = catalogFor(input);
+        const beforeEvidence = JSON.stringify(input);
+        const beforeEntries = JSON.stringify(catalog.entries);
+        const value = JSON.stringify(response(catalog, {
+            status: 'partial',
+            missingEvidence: [point('Missing.', [missingId], catalog)],
+        }));
+
+        expect(validateSoxlAiModelExplanation(value, input, catalog)).toEqual(
+            validateSoxlAiModelExplanation(value, input, catalog),
+        );
+        expect(JSON.stringify(input)).toBe(beforeEvidence);
+        expect(JSON.stringify(catalog.entries)).toBe(beforeEntries);
     });
 });

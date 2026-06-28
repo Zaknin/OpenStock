@@ -1,11 +1,15 @@
 import type {
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
+import {
+    SOXL_AI_EVIDENCE_ALIAS_PATTERN,
+    SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT,
+    type SoxlAiEvidenceReferenceCatalog,
+} from './soxl-ai-evidence-reference-catalog.server';
 import type {
     SoxlAiExplanationPoint,
+    SoxlAiExplanationResponse,
     SoxlAiExplanationStatus,
-    SoxlAiMissingEvidencePoint,
-    SoxlAiModelExplanation,
 } from './soxl-ai-prompt';
 
 export type SoxlAiResponseValidationIssue =
@@ -17,17 +21,24 @@ export type SoxlAiResponseValidationIssue =
     | 'unexpected_top_level_fields'
     | 'missing_required_top_level_field'
     | 'top_level_field_wrong_type'
+    | 'section_missing'
     | 'section_not_array'
+    | 'section_too_many'
     | 'section_item_not_object'
-    | 'missing_required_item_field'
-    | 'item_field_wrong_type'
-    | 'evidence_ids_missing'
-    | 'evidence_ids_not_array'
-    | 'evidence_ids_empty'
-    | 'evidence_ids_too_many'
-    | 'evidence_id_not_string'
-    | 'evidence_id_blank'
-    | 'evidence_id_duplicate'
+    | 'section_item_missing_required_field'
+    | 'section_item_field_wrong_type'
+    | 'section_item_unexpected_field'
+    | 'other_section_shape_mismatch'
+    | 'evidence_refs_missing'
+    | 'evidence_refs_not_array'
+    | 'evidence_refs_empty'
+    | 'evidence_refs_too_many'
+    | 'evidence_ref_not_string'
+    | 'evidence_ref_blank'
+    | 'evidence_ref_format_invalid'
+    | 'evidence_ref_duplicate'
+    | 'evidence_catalog_too_large'
+    | 'response_schema_too_large'
     | 'nullable_contract_mismatch'
     | 'empty_value_not_allowed'
     | 'other_shape_mismatch'
@@ -55,11 +66,21 @@ export type SoxlAiResponseValidationField =
     | 'riskReminders'
     | 'limitations'
     | 'text'
-    | 'evidenceIds';
+    | 'evidenceRefs';
+
+export type SoxlAiResponseValidationSection =
+    | 'summary'
+    | 'supportingEvidence'
+    | 'conflictingEvidence'
+    | 'missingEvidence'
+    | 'riskReminders'
+    | 'limitations';
+
+export type SoxlAiValidatedExplanation = Omit<SoxlAiExplanationResponse, 'snapshotIdentity'>;
 
 export interface SoxlAiResponseValidationSuccess {
     readonly valid: true;
-    readonly value: SoxlAiModelExplanation;
+    readonly value: SoxlAiValidatedExplanation;
     readonly issues: readonly [];
 }
 
@@ -68,6 +89,7 @@ export interface SoxlAiResponseValidationFailure {
     readonly value: null;
     readonly issues: readonly SoxlAiResponseValidationIssue[];
     readonly reason: SoxlAiResponseValidationIssue;
+    readonly section?: SoxlAiResponseValidationSection;
     readonly field?: SoxlAiResponseValidationField;
 }
 
@@ -79,13 +101,13 @@ interface ValidationContext {
     readonly issues: SoxlAiResponseValidationIssue[];
     diagnostic: {
         readonly reason: SoxlAiResponseValidationIssue;
+        readonly section?: SoxlAiResponseValidationSection;
         readonly field?: SoxlAiResponseValidationField;
     } | null;
 }
 
 const maxRawResponseLength = 65_536;
 const maxPointsPerSection = 50;
-const maxEvidenceIdsPerPoint = 20;
 const maxPointTextLength = 2_000;
 const parseFailure = Symbol('parseFailure');
 
@@ -122,13 +144,18 @@ function addIssue(
     context: ValidationContext,
     issue: SoxlAiResponseValidationIssue,
     field?: SoxlAiResponseValidationField,
+    section?: SoxlAiResponseValidationSection,
 ): void {
     if (!context.issues.includes(issue)) {
         context.issues.push(issue);
     }
 
     if (context.diagnostic === null) {
-        context.diagnostic = field === undefined ? { reason: issue } : { reason: issue, field };
+        context.diagnostic = {
+            reason: issue,
+            ...(section === undefined ? {} : { section }),
+            ...(field === undefined ? {} : { field }),
+        };
     }
 }
 
@@ -168,77 +195,90 @@ function isStatus(value: unknown): value is SoxlAiExplanationStatus {
     return value === 'available' || value === 'partial' || value === 'unavailable';
 }
 
-function validateEvidenceIds(
-    evidenceIds: unknown,
+function validateEvidenceRefs(
+    evidenceRefs: unknown,
+    catalog: SoxlAiEvidenceReferenceCatalog,
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
-): evidenceIds is readonly string[] {
-    if (!Array.isArray(evidenceIds)) {
-        addIssue(context, 'evidence_ids_not_array', 'evidenceIds');
-        return false;
+    section: SoxlAiResponseValidationSection,
+): readonly string[] | null {
+    if (!Array.isArray(evidenceRefs)) {
+        addIssue(context, 'evidence_refs_not_array', 'evidenceRefs', section);
+        return null;
     }
 
-    if (evidenceIds.length === 0) {
-        addIssue(context, 'evidence_ids_empty', 'evidenceIds');
-        return false;
+    if (evidenceRefs.length === 0) {
+        addIssue(context, 'evidence_refs_empty', 'evidenceRefs', section);
+        return null;
     }
 
-    if (evidenceIds.length > maxEvidenceIdsPerPoint) {
-        addIssue(context, 'evidence_ids_too_many', 'evidenceIds');
-        return false;
+    if (evidenceRefs.length > SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT) {
+        addIssue(context, 'evidence_refs_too_many', 'evidenceRefs', section);
+        return null;
     }
 
     const seen = new Set<string>();
     let valid = true;
-    evidenceIds.forEach((id) => {
-        if (typeof id !== 'string') {
-            addIssue(context, 'evidence_id_not_string', 'evidenceIds');
+    evidenceRefs.forEach((reference) => {
+        if (typeof reference !== 'string') {
+            addIssue(context, 'evidence_ref_not_string', 'evidenceRefs', section);
             valid = false;
             return;
         }
 
-        if (id.trim().length === 0) {
-            addIssue(context, 'evidence_id_blank', 'evidenceIds');
+        if (reference.trim().length === 0) {
+            addIssue(context, 'evidence_ref_blank', 'evidenceRefs', section);
             valid = false;
             return;
         }
 
-        if (seen.has(id)) {
-            addIssue(context, 'evidence_id_duplicate', 'evidenceIds');
+        if (!SOXL_AI_EVIDENCE_ALIAS_PATTERN.test(reference)) {
+            addIssue(context, 'evidence_ref_format_invalid', 'evidenceRefs', section);
             valid = false;
             return;
         }
 
-        seen.add(id);
+        if (seen.has(reference)) {
+            addIssue(context, 'evidence_ref_duplicate', 'evidenceRefs', section);
+            valid = false;
+            return;
+        }
+
+        seen.add(reference);
     });
 
     if (!valid) {
-        return false;
+        return null;
     }
 
-    evidenceIds.forEach((id) => {
-        if (!validEvidenceIds.has(id)) {
-            addIssue(context, 'unknown_evidence_reference', 'evidenceIds');
+    const evidenceIds: string[] = [];
+    evidenceRefs.forEach((reference) => {
+        const evidenceId = catalog.aliasToEvidenceId.get(reference);
+        if (evidenceId === undefined || !validEvidenceIds.has(evidenceId)) {
+            addIssue(context, 'unknown_evidence_reference', 'evidenceRefs', section);
             valid = false;
+            return;
         }
+        evidenceIds.push(evidenceId);
     });
 
-    return valid;
+    return valid ? evidenceIds : null;
 }
 
 function validatePoint(
     value: unknown,
+    catalog: SoxlAiEvidenceReferenceCatalog,
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
     section: PointSectionKey | 'missingEvidence',
 ): SoxlAiExplanationPoint | null {
     if (value === null) {
-        addIssue(context, 'nullable_contract_mismatch', section);
+        addIssue(context, 'section_item_not_object', undefined, section);
         return null;
     }
 
     if (!isRecord(value)) {
-        addIssue(context, 'section_item_not_object', section);
+        addIssue(context, 'section_item_not_object', undefined, section);
         return null;
     }
 
@@ -248,77 +288,80 @@ function validatePoint(
         return null;
     }
 
-    const expectedKeys = ['text', 'evidenceIds'] as const;
+    const expectedKeys = ['text', 'evidenceRefs'] as const;
     if (Object.keys(value).some((key) => !expectedKeys.includes(key as typeof expectedKeys[number]))) {
-        addIssue(context, 'other_shape_mismatch');
+        addIssue(context, 'section_item_unexpected_field', undefined, section);
         return null;
     }
 
-    if (!Object.hasOwn(value, 'evidenceIds')) {
-        addIssue(context, 'evidence_ids_missing', 'evidenceIds');
+    if (!Object.hasOwn(value, 'evidenceRefs')) {
+        addIssue(context, 'evidence_refs_missing', 'evidenceRefs', section);
         return null;
     }
 
     const missingKey = expectedKeys.find((key) => !Object.hasOwn(value, key));
     if (missingKey !== undefined) {
-        addIssue(context, 'missing_required_item_field', missingKey);
+        addIssue(context, 'section_item_missing_required_field', missingKey, section);
         return null;
     }
 
     if (value.text === null) {
-        addIssue(context, 'nullable_contract_mismatch', 'text');
+        addIssue(context, 'section_item_field_wrong_type', 'text', section);
         return null;
     }
 
     if (typeof value.text !== 'string') {
-        addIssue(context, 'item_field_wrong_type', 'text');
+        addIssue(context, 'section_item_field_wrong_type', 'text', section);
         return null;
     }
 
     if (value.text.trim().length === 0) {
-        addIssue(context, 'empty_value_not_allowed', 'text');
+        addIssue(context, 'other_section_shape_mismatch', 'text', section);
         return null;
     }
 
     if (value.text.length > maxPointTextLength) {
-        addIssue(context, 'other_shape_mismatch', 'text');
+        addIssue(context, 'other_section_shape_mismatch', 'text', section);
         return null;
     }
 
-    if (!validateEvidenceIds(value.evidenceIds, validEvidenceIds, context)) {
+    const evidenceIds = validateEvidenceRefs(
+        value.evidenceRefs,
+        catalog,
+        validEvidenceIds,
+        context,
+        section,
+    );
+    if (evidenceIds === null) {
         return null;
     }
 
     return {
         text: value.text,
-        evidenceIds: value.evidenceIds,
+        evidenceIds,
     };
 }
 
 function validatePointArray(
     value: unknown,
+    catalog: SoxlAiEvidenceReferenceCatalog,
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
     section: PointSectionKey,
 ): readonly SoxlAiExplanationPoint[] {
-    if (value === null) {
-        addIssue(context, 'nullable_contract_mismatch', section);
-        return [];
-    }
-
     if (!Array.isArray(value)) {
-        addIssue(context, 'section_not_array', section);
+        addIssue(context, 'section_not_array', undefined, section);
         return [];
     }
 
     if (value.length > maxPointsPerSection) {
-        addIssue(context, 'other_shape_mismatch', section);
+        addIssue(context, 'section_too_many', undefined, section);
         return [];
     }
 
     const points: SoxlAiExplanationPoint[] = [];
     value.forEach((item) => {
-        const point = validatePoint(item, validEvidenceIds, context, section);
+        const point = validatePoint(item, catalog, validEvidenceIds, context, section);
         if (point !== null) {
             points.push(point);
         }
@@ -328,29 +371,25 @@ function validatePointArray(
 
 function validateMissingEvidenceArray(
     value: unknown,
+    catalog: SoxlAiEvidenceReferenceCatalog,
     validEvidenceIds: ReadonlySet<string>,
     missingEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
-): readonly SoxlAiMissingEvidencePoint[] {
-    if (value === null) {
-        addIssue(context, 'nullable_contract_mismatch', 'missingEvidence');
-        return [];
-    }
-
+): readonly SoxlAiExplanationPoint[] {
     if (!Array.isArray(value)) {
-        addIssue(context, 'section_not_array', 'missingEvidence');
+        addIssue(context, 'section_not_array', undefined, 'missingEvidence');
         return [];
     }
 
     if (value.length > maxPointsPerSection) {
-        addIssue(context, 'other_shape_mismatch', 'missingEvidence');
+        addIssue(context, 'section_too_many', undefined, 'missingEvidence');
         return [];
     }
 
-    const points: SoxlAiMissingEvidencePoint[] = [];
+    const points: SoxlAiExplanationPoint[] = [];
     const citedMissing = new Set<string>();
     value.forEach((item) => {
-        const point = validatePoint(item, validEvidenceIds, context, 'missingEvidence');
+        const point = validatePoint(item, catalog, validEvidenceIds, context, 'missingEvidence');
         if (point === null) {
             return;
         }
@@ -375,7 +414,7 @@ function validateMissingEvidenceArray(
 }
 
 function validateStatus(
-    response: SoxlAiModelExplanation,
+    response: SoxlAiValidatedExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
@@ -385,7 +424,7 @@ function validateStatus(
 }
 
 function validateUnavailableSections(
-    response: SoxlAiModelExplanation,
+    response: SoxlAiValidatedExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
@@ -394,10 +433,10 @@ function validateUnavailableSections(
     }
 
     if (response.supportingEvidence.length > 0) {
-        addIssue(context, 'other_shape_mismatch', 'supportingEvidence');
+        addIssue(context, 'other_section_shape_mismatch', undefined, 'supportingEvidence');
     }
     if (response.conflictingEvidence.length > 0) {
-        addIssue(context, 'other_shape_mismatch', 'conflictingEvidence');
+        addIssue(context, 'other_section_shape_mismatch', undefined, 'conflictingEvidence');
     }
 }
 
@@ -430,7 +469,7 @@ const prohibitedPatterns: readonly RegExp[] = [
 ];
 
 function validateProhibitedContent(
-    response: SoxlAiModelExplanation,
+    response: SoxlAiValidatedExplanation,
     context: ValidationContext,
 ): void {
     const allPoints = allResponsePoints(response);
@@ -447,7 +486,7 @@ function validateProhibitedContent(
 }
 
 function allResponsePoints(
-    response: SoxlAiModelExplanation,
+    response: SoxlAiValidatedExplanation,
 ): readonly SoxlAiExplanationPoint[] {
     return [
         ...response.summary,
@@ -501,7 +540,7 @@ function numericClaimIsGrounded(claim: number, evidenceValues: readonly number[]
 }
 
 function validateNumericGrounding(
-    response: SoxlAiModelExplanation,
+    response: SoxlAiValidatedExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
@@ -522,10 +561,11 @@ function validateNumericGrounding(
 
 function buildResponse(
     root: Record<string, unknown>,
+    catalog: SoxlAiEvidenceReferenceCatalog,
     context: ValidationContext,
     validEvidenceIds: ReadonlySet<string>,
     missingEvidenceIds: ReadonlySet<string>,
-): SoxlAiModelExplanation | null {
+): SoxlAiValidatedExplanation | null {
     const serverMetadataField = findServerMetadataField(root);
     if (serverMetadataField !== undefined) {
         addIssue(context, 'unexpected_server_metadata_field', serverMetadataField);
@@ -537,9 +577,19 @@ function buildResponse(
         return null;
     }
 
-    const missingRootField = soxlAiRequiredTopLevelFields.find((key) => !Object.hasOwn(root, key));
-    if (missingRootField !== undefined) {
-        addIssue(context, 'missing_required_top_level_field', missingRootField);
+    if (!Object.hasOwn(root, 'status')) {
+        addIssue(context, 'missing_required_top_level_field', 'status');
+        return null;
+    }
+
+    const missingSection = pointSectionKeys.find((key) => !Object.hasOwn(root, key));
+    if (missingSection !== undefined) {
+        addIssue(context, 'section_missing', undefined, missingSection);
+        return null;
+    }
+
+    if (!Object.hasOwn(root, 'missingEvidence')) {
+        addIssue(context, 'section_missing', undefined, 'missingEvidence');
         return null;
     }
 
@@ -562,10 +612,11 @@ function buildResponse(
     };
 
     pointSectionKeys.forEach((key) => {
-        sections[key] = validatePointArray(root[key], validEvidenceIds, context, key);
+        sections[key] = validatePointArray(root[key], catalog, validEvidenceIds, context, key);
     });
     const missingEvidence = validateMissingEvidenceArray(
         root.missingEvidence,
+        catalog,
         validEvidenceIds,
         missingEvidenceIds,
         context,
@@ -584,20 +635,20 @@ function buildResponse(
 
 function failure(context: ValidationContext): SoxlAiResponseValidationFailure {
     const diagnostic = context.diagnostic ?? { reason: 'other_shape_mismatch' as const };
-    return diagnostic.field === undefined
-        ? { valid: false, value: null, issues: context.issues, reason: diagnostic.reason }
-        : {
-            valid: false,
-            value: null,
-            issues: context.issues,
-            reason: diagnostic.reason,
-            field: diagnostic.field,
-        };
+    return {
+        valid: false,
+        value: null,
+        issues: context.issues,
+        reason: diagnostic.reason,
+        ...(diagnostic.section === undefined ? {} : { section: diagnostic.section }),
+        ...(diagnostic.field === undefined ? {} : { field: diagnostic.field }),
+    };
 }
 
 export function validateSoxlAiModelExplanation(
     rawResponse: string,
     evidence: SoxlAiEvidencePackage,
+    catalog: SoxlAiEvidenceReferenceCatalog,
 ): SoxlAiResponseValidationResult {
     const context: ValidationContext = { issues: [], diagnostic: null };
     const parsed = parseRawResponse(rawResponse, context);
@@ -611,9 +662,17 @@ export function validateSoxlAiModelExplanation(
         return failure(context);
     }
 
-    const validEvidenceIds = new Set(evidence.items.map((item) => item.id));
-    const missingEvidenceIds = new Set(evidence.groups.missingEvidence);
-    const response = buildResponse(parsed, context, validEvidenceIds, missingEvidenceIds);
+    const validEvidenceIds = new Set(catalog.entries.map(({ evidenceId }) => evidenceId));
+    const missingEvidenceIds = new Set(
+        evidence.groups.missingEvidence.filter((id) => catalog.evidenceIdToAlias.has(id)),
+    );
+    const response = buildResponse(
+        parsed,
+        catalog,
+        context,
+        validEvidenceIds,
+        missingEvidenceIds,
+    );
 
     if (response !== null) {
         validateStatus(response, evidence, context);

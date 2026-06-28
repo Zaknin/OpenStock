@@ -8,8 +8,11 @@ import type {
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
 import {
+    buildSoxlAiEvidenceReferenceCatalog,
+} from './soxl-ai-evidence-reference-catalog.server';
+import {
     buildSoxlAiPrompt,
-    soxlAiModelExplanationResponseFormat,
+    buildSoxlAiModelExplanationResponseFormat,
     type SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
 import {
@@ -17,6 +20,7 @@ import {
     type SoxlAiResponseValidationFailure,
     type SoxlAiResponseValidationField,
     type SoxlAiResponseValidationIssue,
+    type SoxlAiResponseValidationSection,
 } from './soxl-ai-response-validator';
 
 export type SoxlAiExplanationServiceStatus =
@@ -77,10 +81,12 @@ function providerIssue(error: unknown): SoxlAiExplanationServiceIssue {
 
 export function classifySoxlAiValidationRejectionReason(
     validation: SoxlAiResponseValidationFailure,
-): Pick<SoxlAiResponseValidationFailure, 'reason' | 'field'> {
-    return validation.field === undefined
-        ? { reason: validation.reason }
-        : { reason: validation.reason, field: validation.field };
+): Pick<SoxlAiResponseValidationFailure, 'reason' | 'section' | 'field'> {
+    return {
+        reason: validation.reason,
+        ...(validation.section === undefined ? {} : { section: validation.section }),
+        ...(validation.field === undefined ? {} : { field: validation.field }),
+    };
 }
 
 function normalizeProviderResult(
@@ -99,10 +105,12 @@ function normalizeProviderResult(
 function logValidationRejection(
     providerId: string | null,
     reason: SoxlAiValidationRejectionReason,
+    section?: SoxlAiResponseValidationSection,
     field?: SoxlAiResponseValidationField,
 ): void {
+    const sectionSuffix = section === undefined ? '' : ` section=${section}`;
     const fieldSuffix = field === undefined ? '' : ` field=${field}`;
-    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}${fieldSuffix}`);
+    console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}${sectionSuffix}${fieldSuffix}`);
 }
 
 function trustedSnapshotIdentity(
@@ -121,7 +129,27 @@ export async function generateSoxlAiExplanation(
     input: GenerateSoxlAiExplanationInput,
     dependencies: GenerateSoxlAiExplanationDependencies = {},
 ): Promise<SoxlAiExplanationServiceResult> {
-    const prompt = buildSoxlAiPrompt(input.evidence);
+    const catalogResult = buildSoxlAiEvidenceReferenceCatalog(input.evidence);
+    if (!catalogResult.ok) {
+        return {
+            status: 'unavailable',
+            explanation: null,
+            issues: [catalogResult.issue],
+            providerId: null,
+        };
+    }
+
+    const responseFormatResult = buildSoxlAiModelExplanationResponseFormat(catalogResult.catalog);
+    if (!responseFormatResult.ok) {
+        return {
+            status: 'unavailable',
+            explanation: null,
+            issues: [responseFormatResult.issue],
+            providerId: null,
+        };
+    }
+
+    const prompt = buildSoxlAiPrompt(input.evidence, catalogResult.catalog);
     const callProvider = dependencies.callProvider ?? defaultProviderCall;
 
     let providerResult: AIProviderCallResult | { readonly providerId: null; readonly text: string };
@@ -129,7 +157,7 @@ export async function generateSoxlAiExplanation(
         providerResult = normalizeProviderResult(await callProvider({
             systemInstruction: prompt.systemInstruction,
             userInstruction: prompt.userInstruction,
-            responseFormat: soxlAiModelExplanationResponseFormat,
+            responseFormat: responseFormatResult.responseFormat,
         }));
     } catch (error) {
         return {
@@ -140,12 +168,21 @@ export async function generateSoxlAiExplanation(
         };
     }
 
-    const validation = validateSoxlAiModelExplanation(providerResult.text, input.evidence);
+    const validation = validateSoxlAiModelExplanation(
+        providerResult.text,
+        input.evidence,
+        catalogResult.catalog,
+    );
     if (!validation.valid) {
         const issues: SoxlAiExplanationServiceIssue[] = [];
         validation.issues.forEach((issue) => addIssue(issues, issue));
         const rejection = classifySoxlAiValidationRejectionReason(validation);
-        logValidationRejection(providerResult.providerId, rejection.reason, rejection.field);
+        logValidationRejection(
+            providerResult.providerId,
+            rejection.reason,
+            rejection.section,
+            rejection.field,
+        );
         return {
             status: 'unavailable',
             explanation: null,
