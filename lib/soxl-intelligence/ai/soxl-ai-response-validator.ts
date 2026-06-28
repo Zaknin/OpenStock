@@ -1,12 +1,11 @@
 import type {
     SoxlAiEvidencePackage,
-    SoxlAiSnapshotIdentity,
 } from './soxl-ai-evidence';
 import type {
     SoxlAiExplanationPoint,
-    SoxlAiExplanationResponseContract,
     SoxlAiExplanationStatus,
     SoxlAiMissingEvidencePoint,
+    SoxlAiModelExplanation,
 } from './soxl-ai-prompt';
 
 export type SoxlAiResponseValidationIssue =
@@ -14,6 +13,7 @@ export type SoxlAiResponseValidationIssue =
     | 'response_too_large'
     | 'invalid_json'
     | 'root_not_object'
+    | 'unexpected_server_metadata_field'
     | 'unexpected_top_level_fields'
     | 'missing_required_top_level_field'
     | 'top_level_field_wrong_type'
@@ -27,7 +27,6 @@ export type SoxlAiResponseValidationIssue =
     | 'empty_value_not_allowed'
     | 'other_shape_mismatch'
     | 'status_mismatch'
-    | 'snapshot_identity_mismatch'
     | 'unknown_evidence_reference'
     | 'ungrounded_numeric_claim'
     | 'invalid_missing_evidence_reference'
@@ -39,8 +38,11 @@ export type SoxlAiResponseValidationIssue =
 export type SoxlAiResponseValidationField =
     | 'status'
     | 'snapshotIdentity'
+    | 'snapshotToken'
+    | 'provider'
     | 'providerId'
     | 'asOf'
+    | 'generatedAt'
     | 'summary'
     | 'supportingEvidence'
     | 'conflictingEvidence'
@@ -52,7 +54,7 @@ export type SoxlAiResponseValidationField =
 
 export interface SoxlAiResponseValidationSuccess {
     readonly valid: true;
-    readonly value: SoxlAiExplanationResponseContract;
+    readonly value: SoxlAiModelExplanation;
     readonly issues: readonly [];
 }
 
@@ -84,13 +86,21 @@ const parseFailure = Symbol('parseFailure');
 
 export const soxlAiRequiredTopLevelFields = [
     'status',
-    'snapshotIdentity',
     'summary',
     'supportingEvidence',
     'conflictingEvidence',
     'missingEvidence',
     'riskReminders',
     'limitations',
+] as const satisfies readonly SoxlAiResponseValidationField[];
+
+const serverMetadataFields = [
+    'snapshotIdentity',
+    'snapshotToken',
+    'provider',
+    'providerId',
+    'asOf',
+    'generatedAt',
 ] as const satisfies readonly SoxlAiResponseValidationField[];
 
 const pointSectionKeys = [
@@ -121,6 +131,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function findServerMetadataField(
+    value: Record<string, unknown>,
+): typeof serverMetadataFields[number] | undefined {
+    return serverMetadataFields.find((key) => Object.hasOwn(value, key));
+}
+
 function parseRawResponse(
     rawResponse: string,
     context: ValidationContext,
@@ -145,45 +161,6 @@ function parseRawResponse(
 
 function isStatus(value: unknown): value is SoxlAiExplanationStatus {
     return value === 'available' || value === 'partial' || value === 'unavailable';
-}
-
-function validateSnapshotShape(
-    value: unknown,
-    context: ValidationContext,
-): value is SoxlAiExplanationResponseContract['snapshotIdentity'] {
-    if (value === null) {
-        addIssue(context, 'nullable_contract_mismatch', 'snapshotIdentity');
-        return false;
-    }
-
-    if (!isRecord(value)) {
-        addIssue(context, 'top_level_field_wrong_type', 'snapshotIdentity');
-        return false;
-    }
-
-    const expectedKeys = ['providerId', 'asOf'] as const;
-    if (Object.keys(value).some((key) => !expectedKeys.includes(key as typeof expectedKeys[number]))) {
-        addIssue(context, 'other_shape_mismatch');
-        return false;
-    }
-
-    const missingKey = expectedKeys.find((key) => !Object.hasOwn(value, key));
-    if (missingKey !== undefined) {
-        addIssue(context, 'missing_required_item_field', missingKey);
-        return false;
-    }
-
-    if (!(typeof value.providerId === 'string' || value.providerId === null)) {
-        addIssue(context, 'item_field_wrong_type', 'providerId');
-        return false;
-    }
-
-    if (!(typeof value.asOf === 'string' || value.asOf === null)) {
-        addIssue(context, 'item_field_wrong_type', 'asOf');
-        return false;
-    }
-
-    return true;
 }
 
 function validateEvidenceIds(
@@ -261,6 +238,12 @@ function validatePoint(
 
     if (!isRecord(value)) {
         addIssue(context, 'section_item_not_object', section);
+        return null;
+    }
+
+    const serverMetadataField = findServerMetadataField(value);
+    if (serverMetadataField !== undefined) {
+        addIssue(context, 'unexpected_server_metadata_field', serverMetadataField);
         return null;
     }
 
@@ -385,35 +368,18 @@ function validateMissingEvidenceArray(
     return points;
 }
 
-function currentIdentity(evidence: SoxlAiEvidencePackage): SoxlAiSnapshotIdentity | null {
-    return evidence.snapshotIdentities.find((identity) => identity.role === 'current') ?? null;
-}
-
-function validateStatusAndSnapshot(
-    response: SoxlAiExplanationResponseContract,
+function validateStatus(
+    response: SoxlAiModelExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
     if (response.status !== evidence.status) {
         addIssue(context, 'status_mismatch', 'status');
     }
-
-    const identity = currentIdentity(evidence);
-    const expectedProviderId = identity?.providerId ?? null;
-    const expectedAsOf = identity?.asOf === null || identity === null
-        ? null
-        : String(identity.asOf);
-
-    if (
-        response.snapshotIdentity.providerId !== expectedProviderId
-        || response.snapshotIdentity.asOf !== expectedAsOf
-    ) {
-        addIssue(context, 'snapshot_identity_mismatch', 'snapshotIdentity');
-    }
 }
 
 function validateUnavailableSections(
-    response: SoxlAiExplanationResponseContract,
+    response: SoxlAiModelExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
@@ -458,7 +424,7 @@ const prohibitedPatterns: readonly RegExp[] = [
 ];
 
 function validateProhibitedContent(
-    response: SoxlAiExplanationResponseContract,
+    response: SoxlAiModelExplanation,
     context: ValidationContext,
 ): void {
     const allPoints = allResponsePoints(response);
@@ -475,7 +441,7 @@ function validateProhibitedContent(
 }
 
 function allResponsePoints(
-    response: SoxlAiExplanationResponseContract,
+    response: SoxlAiModelExplanation,
 ): readonly SoxlAiExplanationPoint[] {
     return [
         ...response.summary,
@@ -529,7 +495,7 @@ function numericClaimIsGrounded(claim: number, evidenceValues: readonly number[]
 }
 
 function validateNumericGrounding(
-    response: SoxlAiExplanationResponseContract,
+    response: SoxlAiModelExplanation,
     evidence: SoxlAiEvidencePackage,
     context: ValidationContext,
 ): void {
@@ -553,7 +519,13 @@ function buildResponse(
     context: ValidationContext,
     validEvidenceIds: ReadonlySet<string>,
     missingEvidenceIds: ReadonlySet<string>,
-): SoxlAiExplanationResponseContract | null {
+): SoxlAiModelExplanation | null {
+    const serverMetadataField = findServerMetadataField(root);
+    if (serverMetadataField !== undefined) {
+        addIssue(context, 'unexpected_server_metadata_field', serverMetadataField);
+        return null;
+    }
+
     if (Object.keys(root).some((key) => !soxlAiRequiredTopLevelFields.includes(key as typeof soxlAiRequiredTopLevelFields[number]))) {
         addIssue(context, 'unexpected_top_level_fields');
         return null;
@@ -572,10 +544,6 @@ function buildResponse(
 
     if (!isStatus(root.status)) {
         addIssue(context, 'top_level_field_wrong_type', 'status');
-        return null;
-    }
-
-    if (!validateSnapshotShape(root.snapshotIdentity, context)) {
         return null;
     }
 
@@ -599,7 +567,6 @@ function buildResponse(
 
     return {
         status: root.status,
-        snapshotIdentity: root.snapshotIdentity,
         summary: sections.summary,
         supportingEvidence: sections.supportingEvidence,
         conflictingEvidence: sections.conflictingEvidence,
@@ -622,7 +589,7 @@ function failure(context: ValidationContext): SoxlAiResponseValidationFailure {
         };
 }
 
-export function validateSoxlAiExplanationResponse(
+export function validateSoxlAiModelExplanation(
     rawResponse: string,
     evidence: SoxlAiEvidencePackage,
 ): SoxlAiResponseValidationResult {
@@ -643,7 +610,7 @@ export function validateSoxlAiExplanationResponse(
     const response = buildResponse(parsed, context, validEvidenceIds, missingEvidenceIds);
 
     if (response !== null) {
-        validateStatusAndSnapshot(response, evidence, context);
+        validateStatus(response, evidence, context);
         validateUnavailableSections(response, evidence, context);
         validateProhibitedContent(response, context);
         validateNumericGrounding(response, evidence, context);

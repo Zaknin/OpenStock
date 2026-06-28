@@ -7,7 +7,8 @@ import type {
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
 import type {
-    SoxlAiExplanationResponseContract,
+    SoxlAiExplanationResponse,
+    SoxlAiModelExplanation,
 } from './soxl-ai-prompt';
 import {
     classifySoxlAiValidationRejectionReason,
@@ -87,14 +88,10 @@ function point(text: string, ids: readonly string[] = [availableId]) {
 }
 
 function explanation(
-    overrides: Partial<SoxlAiExplanationResponseContract> = {},
-): SoxlAiExplanationResponseContract {
+    overrides: Partial<SoxlAiModelExplanation> = {},
+): SoxlAiModelExplanation {
     return {
         status: 'available',
-        snapshotIdentity: {
-            providerId,
-            asOf: String(asOf),
-        },
         summary: [point('The market facts status is available.')],
         supportingEvidence: [],
         conflictingEvidence: [],
@@ -102,6 +99,19 @@ function explanation(
         riskReminders: [],
         limitations: [],
         ...overrides,
+    };
+}
+
+function applicationExplanation(
+    content: SoxlAiModelExplanation = explanation(),
+    identity: SoxlAiExplanationResponse['snapshotIdentity'] = {
+        providerId,
+        asOf: String(asOf),
+    },
+): SoxlAiExplanationResponse {
+    return {
+        ...content,
+        snapshotIdentity: identity,
     };
 }
 
@@ -122,7 +132,7 @@ describe('generateSoxlAiExplanation', () => {
 
         expect(result).toEqual({
             status: 'available',
-            explanation: explanation(),
+            explanation: applicationExplanation(),
             issues: [],
             providerId: 'gemini',
         });
@@ -136,7 +146,6 @@ describe('generateSoxlAiExplanation', () => {
                 type: 'OBJECT',
                 required: expect.arrayContaining([
                     'status',
-                    'snapshotIdentity',
                     'summary',
                     'supportingEvidence',
                     'conflictingEvidence',
@@ -144,7 +153,17 @@ describe('generateSoxlAiExplanation', () => {
                     'riskReminders',
                     'limitations',
                 ]),
+                properties: expect.not.objectContaining({
+                    snapshotIdentity: expect.anything(),
+                    snapshotToken: expect.anything(),
+                    providerId: expect.anything(),
+                    asOf: expect.anything(),
+                }),
             },
+        });
+        expect(result.explanation?.snapshotIdentity).toEqual({
+            providerId,
+            asOf: String(asOf),
         });
     });
 
@@ -208,13 +227,58 @@ describe('generateSoxlAiExplanation', () => {
         }
     });
 
+    it.each([
+        ['snapshotIdentity', { providerId: 'model-provider', asOf: 'model-time' }],
+        ['snapshotToken', 'model-token'],
+        ['provider', 'model-provider'],
+        ['providerId', 'model-provider'],
+        ['asOf', 'model-time'],
+        ['generatedAt', 'model-time'],
+    ] as const)('rejects model attempts to author trusted metadata through %s', async (field, value) => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                [field]: value,
+            })),
+        });
+
+        expect(result).toEqual({
+            status: 'unavailable',
+            explanation: null,
+            issues: ['unexpected_server_metadata_field'],
+            providerId: 'gemini',
+        });
+        expect(warnSpy).toHaveBeenCalledWith(
+            `SOXL_AI_RESPONSE_REJECTED provider=gemini reason=unexpected_server_metadata_field field=${field}`,
+        );
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(String(value));
+    });
+
+    it('composes market identity from evidence and AI provider identity from invocation', async () => {
+        const packageEvidence = evidence('available', [], {
+            providerId: 'trusted-market-provider',
+            asOf: 1_700_000_000_000,
+        });
+        const result = await generateSoxlAiExplanation({ evidence: packageEvidence }, {
+            callProvider: providerReturning(JSON.stringify(explanation()), 'gemini'),
+        });
+
+        expect(result.providerId).toBe('gemini');
+        expect(result.explanation?.snapshotIdentity).toEqual({
+            providerId: 'trusted-market-provider',
+            asOf: '1700000000000',
+        });
+        expect(JSON.stringify(result.explanation)).not.toContain('model-provider');
+        expect(JSON.stringify(result.explanation)).not.toContain('model-time');
+    });
+
     it('retains multiple validation issues in deterministic de-duplicated order', async () => {
         vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
             callProvider: providerReturning(JSON.stringify({
                 ...explanation(),
                 status: 'partial',
-                snapshotIdentity: { providerId: 'other', asOf: '1' },
                 summary: [
                     point('Text', ['missing.one']),
                     point('More text', ['missing.two']),
@@ -225,7 +289,6 @@ describe('generateSoxlAiExplanation', () => {
         expect(result.issues).toEqual([
             'unknown_evidence_reference',
             'status_mismatch',
-            'snapshot_identity_mismatch',
         ]);
         expect(result.providerId).toBe('gemini');
     });
@@ -245,7 +308,6 @@ describe('generateSoxlAiExplanation', () => {
         const unavailable = await generateSoxlAiExplanation({ evidence: unavailableEvidence }, {
             callProvider: providerReturning(JSON.stringify(explanation({
                 status: 'unavailable',
-                snapshotIdentity: { providerId: null, asOf: null },
                 summary: [point('Current evidence is unavailable.', [missingId])],
                 missingEvidence: [point('The current condition is unavailable.', [missingId])],
                 limitations: [point('Only availability can be explained.', [missingId])],
@@ -253,6 +315,10 @@ describe('generateSoxlAiExplanation', () => {
         });
         expect(unavailable).toMatchObject({ status: 'available', issues: [] });
         expect(unavailable.explanation?.status).toBe('unavailable');
+        expect(unavailable.explanation?.snapshotIdentity).toEqual({
+            providerId: null,
+            asOf: null,
+        });
     });
 
     it('does not log, use the system clock, persist, or call network when a dependency is injected', async () => {

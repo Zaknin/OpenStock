@@ -9,11 +9,11 @@ import type {
 } from './soxl-ai-evidence';
 import {
     buildSoxlAiPrompt,
-    soxlAiExplanationResponseFormat,
-    type SoxlAiExplanationResponseContract,
+    soxlAiModelExplanationResponseFormat,
+    type SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
 import {
-    validateSoxlAiExplanationResponse,
+    validateSoxlAiModelExplanation,
     type SoxlAiResponseValidationFailure,
     type SoxlAiResponseValidationField,
     type SoxlAiResponseValidationIssue,
@@ -33,7 +33,7 @@ export type SoxlAiValidationRejectionReason = SoxlAiResponseValidationIssue;
 
 export interface SoxlAiExplanationServiceResult {
     readonly status: SoxlAiExplanationServiceStatus;
-    readonly explanation: SoxlAiExplanationResponseContract | null;
+    readonly explanation: SoxlAiExplanationResponse | null;
     readonly issues: readonly SoxlAiExplanationServiceIssue[];
     readonly providerId: string | null;
 }
@@ -105,6 +105,18 @@ function logValidationRejection(
     console.warn(`SOXL_AI_RESPONSE_REJECTED provider=${providerId ?? 'unknown'} reason=${reason}${fieldSuffix}`);
 }
 
+function trustedSnapshotIdentity(
+    evidence: SoxlAiEvidencePackage,
+): SoxlAiExplanationResponse['snapshotIdentity'] {
+    const identity = evidence.snapshotIdentities.find(({ role }) => role === 'current') ?? null;
+    return {
+        providerId: identity?.providerId ?? null,
+        asOf: identity?.asOf === null || identity === null
+            ? null
+            : String(identity.asOf),
+    };
+}
+
 export async function generateSoxlAiExplanation(
     input: GenerateSoxlAiExplanationInput,
     dependencies: GenerateSoxlAiExplanationDependencies = {},
@@ -117,7 +129,7 @@ export async function generateSoxlAiExplanation(
         providerResult = normalizeProviderResult(await callProvider({
             systemInstruction: prompt.systemInstruction,
             userInstruction: prompt.userInstruction,
-            responseFormat: soxlAiExplanationResponseFormat,
+            responseFormat: soxlAiModelExplanationResponseFormat,
         }));
     } catch (error) {
         return {
@@ -128,7 +140,7 @@ export async function generateSoxlAiExplanation(
         };
     }
 
-    const validation = validateSoxlAiExplanationResponse(providerResult.text, input.evidence);
+    const validation = validateSoxlAiModelExplanation(providerResult.text, input.evidence);
     if (!validation.valid) {
         const issues: SoxlAiExplanationServiceIssue[] = [];
         validation.issues.forEach((issue) => addIssue(issues, issue));
@@ -144,7 +156,10 @@ export async function generateSoxlAiExplanation(
 
     return {
         status: 'available',
-        explanation: validation.value,
+        explanation: {
+            ...validation.value,
+            snapshotIdentity: trustedSnapshotIdentity(input.evidence),
+        },
         issues: [],
         providerId: providerResult.providerId,
     };

@@ -3,10 +3,10 @@ import type {
     SoxlAiEvidencePackage,
 } from './soxl-ai-evidence';
 import type {
-    SoxlAiExplanationResponseContract,
+    SoxlAiModelExplanation,
 } from './soxl-ai-prompt';
 import {
-    validateSoxlAiExplanationResponse,
+    validateSoxlAiModelExplanation,
     type SoxlAiResponseValidationIssue,
 } from './soxl-ai-response-validator';
 
@@ -88,14 +88,10 @@ function point(text: string, ids: readonly string[] = [availableId]) {
 }
 
 function response(
-    overrides: Partial<SoxlAiExplanationResponseContract> = {},
-): SoxlAiExplanationResponseContract {
+    overrides: Partial<SoxlAiModelExplanation> = {},
+): SoxlAiModelExplanation {
     return {
         status: 'available',
-        snapshotIdentity: {
-            providerId,
-            asOf: String(asOf),
-        },
         summary: [point('The latest completed close is available.')],
         supportingEvidence: [],
         conflictingEvidence: [],
@@ -116,7 +112,7 @@ function expectIssue(
     packageEvidence = evidence(),
     field?: string,
 ): void {
-    const result = validateSoxlAiExplanationResponse(
+    const result = validateSoxlAiModelExplanation(
         typeof value === 'string' ? value : raw(value),
         packageEvidence,
     );
@@ -129,15 +125,15 @@ function expectIssue(
     expect(JSON.stringify(result)).not.toContain('raw-secret');
 }
 
-describe('validateSoxlAiExplanationResponse', () => {
+describe('validateSoxlAiModelExplanation', () => {
     it('accepts valid available, partial, and unavailable responses', () => {
-        expect(validateSoxlAiExplanationResponse(raw(response()), evidence())).toMatchObject({
+        expect(validateSoxlAiModelExplanation(raw(response()), evidence())).toMatchObject({
             valid: true,
             issues: [],
         });
 
         const partialEvidence = evidence('partial', [missingId]);
-        expect(validateSoxlAiExplanationResponse(raw(response({
+        expect(validateSoxlAiModelExplanation(raw(response({
             status: 'partial',
             missingEvidence: [point('The condition state is unavailable.', [missingId])],
         })), partialEvidence)).toMatchObject({
@@ -146,9 +142,8 @@ describe('validateSoxlAiExplanationResponse', () => {
         });
 
         const unavailableEvidence = evidence('unavailable', [missingId], { providerId: null, asOf: null });
-        expect(validateSoxlAiExplanationResponse(raw(response({
+        expect(validateSoxlAiModelExplanation(raw(response({
             status: 'unavailable',
-            snapshotIdentity: { providerId: null, asOf: null },
             summary: [point('Current evidence is unavailable.', [missingId])],
             missingEvidence: [point('Current evidence is unavailable.', [missingId])],
             limitations: [point('Only availability information can be stated.', [missingId])],
@@ -183,16 +178,41 @@ describe('validateSoxlAiExplanationResponse', () => {
         ['invalid status value', () => ({ ...response(), status: 'done' }), 'top_level_field_wrong_type', 'status'],
         ['null status', () => ({ ...response(), status: null }), 'nullable_contract_mismatch', 'status'],
         ['status mismatch', () => ({ ...response(), status: 'partial' }), 'status_mismatch', undefined],
-        ['missing snapshot key', () => ({ ...response(), snapshotIdentity: { providerId } }), 'missing_required_item_field', 'asOf'],
-        ['additional snapshot key', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf), modelProperty: true } }), 'other_shape_mismatch', undefined],
-        ['snapshot wrong type', () => ({ ...response(), snapshotIdentity: [] }), 'top_level_field_wrong_type', 'snapshotIdentity'],
-        ['snapshot null', () => ({ ...response(), snapshotIdentity: null }), 'nullable_contract_mismatch', 'snapshotIdentity'],
-        ['snapshot item wrong type', () => ({ ...response(), snapshotIdentity: { providerId: 4, asOf: String(asOf) } }), 'item_field_wrong_type', 'providerId'],
-        ['provider mismatch', () => ({ ...response(), snapshotIdentity: { providerId: 'other', asOf: String(asOf) } }), 'snapshot_identity_mismatch', undefined],
-        ['asOf mismatch', () => ({ ...response(), snapshotIdentity: { providerId, asOf: String(asOf + 1) } }), 'snapshot_identity_mismatch', undefined],
-        ['plan identity cannot replace current identity', () => ({ ...response(), snapshotIdentity: { providerId: 'plan-provider', asOf: String(asOf - 1) } }), 'snapshot_identity_mismatch', undefined],
-    ] as const)('rejects status or snapshot issue: %s', (_name, makeValue, issue, field) => {
+    ] as const)('rejects status issue: %s', (_name, makeValue, issue, field) => {
         expectIssue(makeValue(), issue, evidence(), field);
+    });
+
+    it.each([
+        ['snapshotIdentity', { providerId: 'model-provider', asOf: 'model-time' }],
+        ['snapshotToken', 'model-token'],
+        ['provider', 'model-provider'],
+        ['providerId', 'model-provider'],
+        ['asOf', 'model-time'],
+        ['generatedAt', 'model-time'],
+    ] as const)('rejects server-owned model field %s with a fixed diagnostic', (field, value) => {
+        const result = validateSoxlAiModelExplanation(raw({
+            ...response(),
+            [field]: value,
+        }), evidence());
+
+        expect(result).toEqual({
+            valid: false,
+            value: null,
+            issues: ['unexpected_server_metadata_field'],
+            reason: 'unexpected_server_metadata_field',
+            field,
+        });
+        expect(JSON.stringify(result)).not.toContain(String(value));
+    });
+
+    it('rejects server-owned metadata nested inside a content item', () => {
+        expectIssue({
+            ...response(),
+            summary: [{
+                ...point('Text'),
+                snapshotIdentity: { providerId: 'model-provider', asOf: 'model-time' },
+            }],
+        }, 'unexpected_server_metadata_field', evidence(), 'snapshotIdentity');
     });
 
     it.each([
@@ -235,7 +255,6 @@ describe('validateSoxlAiExplanationResponse', () => {
     it('requires unsupported sections to stay empty for unavailable packages', () => {
         expectIssue(response({
             status: 'unavailable',
-            snapshotIdentity: { providerId: null, asOf: null },
             supportingEvidence: [point('Unsupported.', [missingId])],
             missingEvidence: [point('Missing.', [missingId])],
         }), 'other_shape_mismatch', evidence('unavailable', [missingId], { providerId: null, asOf: null }));
@@ -291,7 +310,7 @@ describe('validateSoxlAiExplanationResponse', () => {
         'The user supplied a long side.',
         'The short side is a user-supplied field.',
     ])('allows neutral domain text: %s', (text) => {
-        expect(validateSoxlAiExplanationResponse(raw(response({ summary: [point(text)] })), evidence())).toMatchObject({
+        expect(validateSoxlAiModelExplanation(raw(response({ summary: [point(text)] })), evidence())).toMatchObject({
             valid: true,
         });
     });
@@ -304,7 +323,7 @@ describe('validateSoxlAiExplanationResponse', () => {
     });
 
     it('permits rounded explicit numeric claims grounded in cited evidence values', () => {
-        expect(validateSoxlAiExplanationResponse(
+        expect(validateSoxlAiModelExplanation(
             raw(response({ summary: [point('The latest completed close is $27.12.')] })),
             evidence(),
         )).toMatchObject({ valid: true });
@@ -314,7 +333,7 @@ describe('validateSoxlAiExplanationResponse', () => {
         ['tradePlanExplanation', [point('Plan content.')]],
         ['monitoringChanges', [point('Monitor content.')]],
     ] as const)('rejects removed current-only field %s without retaining its name', (field, value) => {
-        const result = validateSoxlAiExplanationResponse(raw({
+        const result = validateSoxlAiModelExplanation(raw({
             ...response(),
             [field]: value,
         }), evidence());
@@ -327,7 +346,7 @@ describe('validateSoxlAiExplanationResponse', () => {
     });
 
     it('keeps all current grounded sections available', () => {
-        expect(validateSoxlAiExplanationResponse(raw(response({
+        expect(validateSoxlAiModelExplanation(raw(response({
             summary: [point('Current market summary is grounded.', [availableId])],
             supportingEvidence: [point('Supporting evidence is grounded.', [availableId])],
             conflictingEvidence: [point('Conflicting evidence is grounded.', [availableId])],
@@ -338,7 +357,7 @@ describe('validateSoxlAiExplanationResponse', () => {
 
     it('stores only fixed diagnostics and no raw response content', () => {
         const secretProperty = 'modelSuppliedCredentialBearingProperty';
-        const result = validateSoxlAiExplanationResponse(raw({
+        const result = validateSoxlAiModelExplanation(raw({
             ...response(),
             [secretProperty]: 'raw-secret generated prose evidence snapshot-token credential',
         }), evidence());
@@ -364,8 +383,8 @@ describe('validateSoxlAiExplanationResponse', () => {
             status: 'partial',
             missingEvidence: [point('Missing condition.', [missingId])],
         }));
-        const first = validateSoxlAiExplanationResponse(value, packageEvidence);
-        const second = validateSoxlAiExplanationResponse(value, JSON.parse(before) as SoxlAiEvidencePackage);
+        const first = validateSoxlAiModelExplanation(value, packageEvidence);
+        const second = validateSoxlAiModelExplanation(value, JSON.parse(before) as SoxlAiEvidencePackage);
 
         expect(JSON.stringify(packageEvidence)).toBe(before);
         expect(first).toEqual(second);
@@ -376,7 +395,7 @@ describe('validateSoxlAiExplanationResponse', () => {
             throw new Error('Date.now should not be called');
         });
 
-        expect(validateSoxlAiExplanationResponse(raw(response()), evidence())).toMatchObject({ valid: true });
+        expect(validateSoxlAiModelExplanation(raw(response()), evidence())).toMatchObject({ valid: true });
         expect(dateNowSpy).not.toHaveBeenCalled();
     });
 });

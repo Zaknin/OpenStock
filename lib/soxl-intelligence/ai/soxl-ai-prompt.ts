@@ -21,12 +21,8 @@ export interface SoxlAiMissingEvidencePoint {
     readonly evidenceIds: readonly string[];
 }
 
-export interface SoxlAiExplanationResponseContract {
+export interface SoxlAiModelExplanation {
     readonly status: SoxlAiExplanationStatus;
-    readonly snapshotIdentity: {
-        readonly providerId: string | null;
-        readonly asOf: string | null;
-    };
     readonly summary: readonly SoxlAiExplanationPoint[];
     readonly supportingEvidence: readonly SoxlAiExplanationPoint[];
     readonly conflictingEvidence: readonly SoxlAiExplanationPoint[];
@@ -35,11 +31,18 @@ export interface SoxlAiExplanationResponseContract {
     readonly limitations: readonly SoxlAiExplanationPoint[];
 }
 
+export interface SoxlAiExplanationResponse extends SoxlAiModelExplanation {
+    readonly snapshotIdentity: {
+        readonly providerId: string | null;
+        readonly asOf: string | null;
+    };
+}
+
 export interface SoxlAiPrompt {
     readonly version: 'soxl-grounded-explanation-v1';
     readonly systemInstruction: string;
     readonly userInstruction: string;
-    readonly responseContract: SoxlAiExplanationResponseContract;
+    readonly responseContract: SoxlAiModelExplanation;
 }
 
 const version = 'soxl-grounded-explanation-v1' as const;
@@ -49,7 +52,6 @@ const evidenceEndBoundary = 'END_SOXL_EVIDENCE_JSON';
 const responseShape = {
     requiredTopLevelKeys: [
         'status',
-        'snapshotIdentity',
         'summary',
         'supportingEvidence',
         'conflictingEvidence',
@@ -59,10 +61,6 @@ const responseShape = {
     ],
     noAdditionalTopLevelKeys: true,
     statusValues: ['available', 'partial', 'unavailable'],
-    snapshotIdentity: {
-        providerId: 'string|null',
-        asOf: 'string|null',
-    },
     evidencePoint: {
         text: 'string',
         evidenceIds: 'readonly string[]; every id must exist in evidence.items',
@@ -77,12 +75,8 @@ const responseShape = {
     ],
 } as const;
 
-const emptyResponseContract: SoxlAiExplanationResponseContract = {
+const emptyResponseContract: SoxlAiModelExplanation = {
     status: 'unavailable',
-    snapshotIdentity: {
-        providerId: null,
-        asOf: null,
-    },
     summary: [],
     supportingEvidence: [],
     conflictingEvidence: [],
@@ -109,26 +103,12 @@ const evidencePointArraySchema: AIProviderJsonSchema = {
     items: evidencePointSchema,
 };
 
-export const soxlAiExplanationResponseJsonSchema: AIProviderJsonSchema = {
+export const soxlAiModelExplanationJsonSchema: AIProviderJsonSchema = {
     type: 'OBJECT',
     properties: {
         status: {
             type: 'STRING',
             enum: ['available', 'partial', 'unavailable'],
-        },
-        snapshotIdentity: {
-            type: 'OBJECT',
-            properties: {
-                providerId: {
-                    type: 'STRING',
-                    nullable: true,
-                },
-                asOf: {
-                    type: 'STRING',
-                    nullable: true,
-                },
-            },
-            required: ['providerId', 'asOf'],
         },
         summary: evidencePointArraySchema,
         supportingEvidence: evidencePointArraySchema,
@@ -139,7 +119,6 @@ export const soxlAiExplanationResponseJsonSchema: AIProviderJsonSchema = {
     },
     required: [
         'status',
-        'snapshotIdentity',
         'summary',
         'supportingEvidence',
         'conflictingEvidence',
@@ -149,9 +128,9 @@ export const soxlAiExplanationResponseJsonSchema: AIProviderJsonSchema = {
     ],
 };
 
-export const soxlAiExplanationResponseFormat: AIProviderResponseFormat = {
+export const soxlAiModelExplanationResponseFormat: AIProviderResponseFormat = {
     mimeType: 'application/json',
-    schema: soxlAiExplanationResponseJsonSchema,
+    schema: soxlAiModelExplanationJsonSchema,
 };
 
 const systemInstruction = [
@@ -170,7 +149,9 @@ const systemInstruction = [
     'Missing-evidence statements must cite the relevant unknown or unavailable evidence item.',
     'Generic limitations should cite a relevant status, issue, or availability item where possible.',
     'Use empty arrays for sections that are not applicable.',
-    'Return only a valid JSON object matching the structured response shape described below, with no Markdown code fence, no surrounding prose, no additional top-level keys, and no catch-all prose field.',
+    'Return one valid JSON object containing explanation content only and matching the structured response shape described below, with no Markdown code fence, no surrounding prose, no additional top-level keys, and no catch-all prose field.',
+    'Do not return snapshot identity, snapshot tokens, provider identity, server As of metadata, or generation timestamps as response fields.',
+    'An As of statement is permitted only inside a properly cited explanation item when supported by supplied evidence.',
     'Distinguish supporting evidence, conflicting evidence, and missing evidence without selecting a preferred scenario.',
     'Do not include trade-plan or monitoring sections.',
     'State limitations clearly and avoid guarantees or implied certainty.',

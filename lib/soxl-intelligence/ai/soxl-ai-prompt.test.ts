@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     buildSoxlAiPrompt,
-    soxlAiExplanationResponseFormat,
-    soxlAiExplanationResponseJsonSchema,
+    soxlAiModelExplanationJsonSchema,
+    soxlAiModelExplanationResponseFormat,
 } from './soxl-ai-prompt';
 import type {
     SoxlAiEvidencePackage,
@@ -109,7 +109,6 @@ describe('buildSoxlAiPrompt', () => {
 
         expect(Object.keys(prompt.responseContract)).toEqual([
             'status',
-            'snapshotIdentity',
             'summary',
             'supportingEvidence',
             'conflictingEvidence',
@@ -121,6 +120,8 @@ describe('buildSoxlAiPrompt', () => {
         expect(prompt.userInstruction).not.toContain('"prose"');
         expect(prompt.userInstruction).not.toContain('"freeText"');
         expect(prompt.userInstruction).not.toContain('"message"');
+        expect(prompt.systemInstruction).toContain('explanation content only');
+        expect(prompt.systemInstruction).toContain('Do not return snapshot identity, snapshot tokens, provider identity, server As of metadata, or generation timestamps');
     });
 
     it('requires evidence references and prohibits invented IDs, source paths, unsupported numbers, and missing-value reconstruction', () => {
@@ -174,7 +175,7 @@ describe('buildSoxlAiPrompt', () => {
         expect(unavailable.userInstruction).toContain('do not reconstruct missing market facts');
         expect(partial.userInstruction).toContain('If the evidence package status is partial');
         expect(partial.userInstruction).toContain('explain only available parts and list missing parts separately');
-        expect(partial.systemInstruction).toContain('Return only a valid JSON object matching the structured response shape');
+        expect(partial.systemInstruction).toContain('Return one valid JSON object containing explanation content only');
         expect(partial.systemInstruction).toContain('no Markdown code fence');
     });
 
@@ -211,24 +212,16 @@ describe('buildSoxlAiPrompt', () => {
     });
 
     it('exports the provider-facing JSON response schema for the existing response contract', () => {
-        expect(soxlAiExplanationResponseFormat).toEqual({
+        expect(soxlAiModelExplanationResponseFormat).toEqual({
             mimeType: 'application/json',
-            schema: soxlAiExplanationResponseJsonSchema,
+            schema: soxlAiModelExplanationJsonSchema,
         });
-        expect(soxlAiExplanationResponseJsonSchema).toMatchObject({
+        expect(soxlAiModelExplanationJsonSchema).toMatchObject({
             type: 'OBJECT',
             properties: {
                 status: {
                     type: 'STRING',
                     enum: ['available', 'partial', 'unavailable'],
-                },
-                snapshotIdentity: {
-                    type: 'OBJECT',
-                    properties: {
-                        providerId: { type: 'STRING', nullable: true },
-                        asOf: { type: 'STRING', nullable: true },
-                    },
-                    required: ['providerId', 'asOf'],
                 },
                 summary: { type: 'ARRAY' },
                 supportingEvidence: { type: 'ARRAY' },
@@ -239,7 +232,6 @@ describe('buildSoxlAiPrompt', () => {
             },
             required: [
                 'status',
-                'snapshotIdentity',
                 'summary',
                 'supportingEvidence',
                 'conflictingEvidence',
@@ -251,23 +243,15 @@ describe('buildSoxlAiPrompt', () => {
     });
 
     it('keeps schema, validator, nested point, nullable, and empty-array contracts aligned', () => {
-        const schema = soxlAiExplanationResponseJsonSchema;
+        const schema = soxlAiModelExplanationJsonSchema;
         const properties = schema.properties ?? {};
         const prompt = buildSoxlAiPrompt(evidence());
         const shapeText = prompt.userInstruction.split('BEGIN_SOXL_EVIDENCE_JSON')[0];
 
         expect(schema.required).toEqual(soxlAiRequiredTopLevelFields);
         expect(Object.keys(properties)).toEqual(soxlAiRequiredTopLevelFields);
-        expect(properties.snapshotIdentity).toMatchObject({
-            required: ['providerId', 'asOf'],
-            properties: {
-                providerId: { type: 'STRING', nullable: true },
-                asOf: { type: 'STRING', nullable: true },
-            },
-        });
-
         const sectionKeys = soxlAiRequiredTopLevelFields.filter((key) => (
-            key !== 'status' && key !== 'snapshotIdentity'
+            key !== 'status'
         ));
         sectionKeys.forEach((key) => {
             expect(properties[key]).toMatchObject({
@@ -289,5 +273,28 @@ describe('buildSoxlAiPrompt', () => {
         expect(Object.keys(properties)).not.toContain('monitoringChanges');
         expect(shapeText).not.toContain('tradePlanExplanation');
         expect(shapeText).not.toContain('monitoringChanges');
+    });
+
+    it('excludes all server-owned metadata from the model contract and provider schema', () => {
+        const prompt = buildSoxlAiPrompt(evidence());
+        const properties = soxlAiModelExplanationJsonSchema.properties ?? {};
+        const required = soxlAiModelExplanationJsonSchema.required ?? [];
+        const shapeText = prompt.userInstruction.split('BEGIN_SOXL_EVIDENCE_JSON')[0];
+        const serverFields = [
+            'snapshotIdentity',
+            'snapshotToken',
+            'provider',
+            'providerId',
+            'asOf',
+            'generatedAt',
+        ] as const;
+
+        serverFields.forEach((field) => {
+            expect(Object.keys(properties)).not.toContain(field);
+            expect(required).not.toContain(field);
+            expect(Object.keys(prompt.responseContract)).not.toContain(field);
+            expect(shapeText).not.toContain(`\"${field}\"`);
+        });
+        expect(prompt.systemInstruction).not.toContain('soxl-current-v1:');
     });
 });

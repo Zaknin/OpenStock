@@ -19,7 +19,7 @@ import {
     type SoxlAiExplanationServiceResult,
 } from './soxl-ai-explanation-service.server';
 import type {
-    SoxlAiExplanationResponseContract,
+    SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
 import {
     defaultSoxlAiInvocationGuard,
@@ -47,7 +47,7 @@ export type SoxlAiCurrentExplanationIssue =
 
 export interface SoxlAiCurrentExplanationResult {
     readonly status: 'available' | 'unavailable';
-    readonly explanation: SoxlAiExplanationResponseContract | null;
+    readonly explanation: SoxlAiExplanationResponse | null;
     readonly issues: readonly SoxlAiCurrentExplanationIssue[];
     readonly retryAfterSeconds: number | null;
     readonly snapshotToken: string | null;

@@ -13,7 +13,7 @@ import {
     buildSoxlAiCurrentSnapshotToken,
 } from './soxl-ai-current-snapshot-token.server';
 import type {
-    SoxlAiExplanationResponseContract,
+    SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
 import {
     generateCurrentSoxlExplanation,
@@ -207,7 +207,7 @@ function snapshot(overrides: Partial<SoxlCurrentDeterministicSnapshot> = {}): So
     };
 }
 
-function explanation(): SoxlAiExplanationResponseContract {
+function explanation(): SoxlAiExplanationResponse {
     return {
         status: 'available',
         snapshotIdentity: { providerId, asOf: String(asOf) },
