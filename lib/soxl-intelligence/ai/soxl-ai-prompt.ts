@@ -66,7 +66,6 @@ const version = 'soxl-grounded-explanation-v1' as const;
 const evidenceStartBoundary = 'BEGIN_SOXL_EVIDENCE_JSON';
 const evidenceEndBoundary = 'END_SOXL_EVIDENCE_JSON';
 export const SOXL_AI_MAX_POINTS_PER_SECTION = 50;
-export const SOXL_AI_MAX_RESPONSE_SCHEMA_BYTES = 32_768;
 
 const responseShape = {
     requiredTopLevelKeys: [
@@ -104,28 +103,14 @@ const emptyResponseContract: SoxlAiModelExplanation = {
     limitations: [],
 };
 
-export type SoxlAiModelExplanationResponseFormatResult =
-    | {
-        readonly ok: true;
-        readonly responseFormat: AIProviderResponseFormat;
-        readonly schemaByteLength: number;
-    }
-    | {
-        readonly ok: false;
-        readonly issue: 'response_schema_too_large';
-    };
-
-export function buildSoxlAiModelExplanationJsonSchema(
-    catalog: SoxlAiEvidenceReferenceCatalog,
-): AIProviderJsonSchema {
-    const aliases = catalog.entries.map(({ alias }) => alias);
+export function buildSoxlAiModelExplanationJsonSchema(): AIProviderJsonSchema {
     const evidencePointSchema: AIProviderJsonSchema = {
         type: 'OBJECT',
         properties: {
             text: { type: 'STRING' },
             evidenceRefs: {
                 type: 'ARRAY',
-                items: { type: 'STRING', enum: aliases },
+                items: { type: 'STRING' },
                 minItems: 1,
                 maxItems: SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT,
             },
@@ -165,18 +150,10 @@ export function buildSoxlAiModelExplanationJsonSchema(
 }
 
 export function buildSoxlAiModelExplanationResponseFormat(
-    catalog: SoxlAiEvidenceReferenceCatalog,
-): SoxlAiModelExplanationResponseFormatResult {
-    const schema = buildSoxlAiModelExplanationJsonSchema(catalog);
-    const schemaByteLength = new TextEncoder().encode(JSON.stringify(schema)).byteLength;
-    if (schemaByteLength > SOXL_AI_MAX_RESPONSE_SCHEMA_BYTES) {
-        return { ok: false, issue: 'response_schema_too_large' };
-    }
-
+): AIProviderResponseFormat {
     return {
-        ok: true,
-        responseFormat: { mimeType: 'application/json', schema },
-        schemaByteLength,
+        mimeType: 'application/json',
+        schema: buildSoxlAiModelExplanationJsonSchema(),
     };
 }
 

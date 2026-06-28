@@ -176,7 +176,7 @@ describe('generateSoxlAiExplanation', () => {
                                 evidenceRefs: {
                                     minItems: 1,
                                     maxItems: 20,
-                                    items: { enum: ['E001', 'E002'] },
+                                    items: { type: 'STRING' },
                                 },
                             },
                         },
@@ -202,11 +202,16 @@ describe('generateSoxlAiExplanation', () => {
     });
 
     it.each([
-        [new AIProviderError('provider_not_configured', 'gemini'), 'provider_not_configured'],
-        [new AIProviderError('provider_timeout', 'gemini'), 'provider_timeout'],
-        [new AIProviderError('provider_http_error', 'gemini'), 'provider_error'],
-        [new Error('raw provider secret'), 'provider_error'],
-    ] as const)('maps provider failures safely: %s', async (thrown, issue) => {
+        [new AIProviderError('provider_not_configured', 'gemini'), 'provider_not_configured', 'unknown_provider_error', 'none'],
+        [new AIProviderError('provider_timeout', 'gemini'), 'provider_timeout', 'provider_timeout', 'none'],
+        [new AIProviderError('provider_http_error', 'gemini', {
+            category: 'structured_output_rejected',
+            httpStatus: 400,
+        }), 'provider_error', 'structured_output_rejected', '400'],
+        [new AIProviderError('provider_invalid_response', 'gemini'), 'provider_error', 'invalid_provider_response', 'none'],
+        [new Error('raw provider secret'), 'provider_error', 'unknown_provider_error', 'none'],
+    ] as const)('maps provider failures safely: %s', async (thrown, issue, category, status) => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const callProvider = vi.fn<SoxlAiProviderCall>().mockRejectedValue(thrown);
         const result = await generateSoxlAiExplanation({ evidence: evidence() }, { callProvider });
 
@@ -216,7 +221,80 @@ describe('generateSoxlAiExplanation', () => {
             issues: [issue],
             providerId: thrown instanceof AIProviderError ? thrown.providerId : null,
         });
+        expect(warnSpy).toHaveBeenCalledWith(
+            `SOXL_AI_PROVIDER_FAILED provider=${thrown instanceof AIProviderError ? thrown.providerId : 'unknown'} category=${category} httpStatus=${status}`,
+        );
         expect(JSON.stringify(result)).not.toContain('raw provider secret');
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('raw provider secret');
+    });
+
+    it.each([
+        ['', 'empty_response'],
+        ['{bad json', 'invalid_json'],
+        [JSON.stringify({ ...explanation(), modelSuppliedProperty: true }), 'unexpected_top_level_fields'],
+        [JSON.stringify({ ...explanation(), summary: [modelPoint('Text', ['E999'])] }), 'unknown_evidence_reference'],
+        [JSON.stringify({ ...explanation(), summary: [modelPoint('you should buy')] }), 'forbidden_recommendation'],
+    ] as const)('maps validation failure without returning raw output: %s', async (rawResponse, issue) => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(rawResponse),
+        });
+
+        expect(result).toMatchObject({
+            status: 'unavailable',
+            explanation: null,
+            issues: expect.arrayContaining([issue]),
+            providerId: 'gemini',
+        });
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        if (rawResponse.length > 0) {
+            expect(JSON.stringify(result)).not.toContain(rawResponse);
+            expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(rawResponse);
+        }
+    });
+
+    it.each([
+        ['snapshotIdentity', { providerId: 'model-provider', asOf: 'model-time' }],
+        ['snapshotToken', 'model-token'],
+        ['provider', 'model-provider'],
+        ['providerId', 'model-provider'],
+        ['asOf', 'model-time'],
+        ['generatedAt', 'model-time'],
+    ] as const)('rejects model attempts to author trusted metadata through %s', async (field, value) => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                [field]: value,
+            })),
+        });
+
+        expect(result).toEqual({
+            status: 'unavailable',
+            explanation: null,
+            issues: ['unexpected_server_metadata_field'],
+            providerId: 'gemini',
+        });
+        expect(warnSpy).toHaveBeenCalledWith(
+            `SOXL_AI_RESPONSE_REJECTED provider=gemini reason=unexpected_server_metadata_field field=${field}`,
+        );
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(String(value));
+    });
+
+    it('retains multiple validation issues in deterministic de-duplicated order', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify({
+                ...explanation(),
+                status: 'partial',
+                summary: [
+                    modelPoint('Text', ['E999']),
+                    modelPoint('More text', ['E998']),
+                ],
+            })),
+        });
+
+        expect(result.issues).toEqual(['unknown_evidence_reference', 'status_mismatch']);
     });
 
     it('fails before provider invocation when the catalog ceiling is exceeded', async () => {
@@ -227,19 +305,6 @@ describe('generateSoxlAiExplanation', () => {
             status: 'unavailable',
             explanation: null,
             issues: ['evidence_catalog_too_large'],
-            providerId: null,
-        });
-        expect(callProvider).not.toHaveBeenCalled();
-    });
-
-    it('fails before provider invocation when the schema ceiling is exceeded', async () => {
-        const callProvider = providerReturning(JSON.stringify(explanation()));
-        const result = await generateSoxlAiExplanation({ evidence: largeEvidence(999) }, { callProvider });
-
-        expect(result).toEqual({
-            status: 'unavailable',
-            explanation: null,
-            issues: ['response_schema_too_large'],
             providerId: null,
         });
         expect(callProvider).not.toHaveBeenCalled();

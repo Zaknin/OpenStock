@@ -93,7 +93,6 @@ const issueMessages: Record<SoxlAiCurrentExplanationIssue, string> = {
     evidence_ref_format_invalid: 'The AI response did not pass the grounding and safety checks.',
     evidence_ref_duplicate: 'The AI response did not pass the grounding and safety checks.',
     evidence_catalog_too_large: 'The AI response did not pass the grounding and safety checks.',
-    response_schema_too_large: 'The AI response did not pass the grounding and safety checks.',
     nullable_contract_mismatch: 'The AI response did not pass the grounding and safety checks.',
     empty_value_not_allowed: 'The AI response did not pass the grounding and safety checks.',
     other_shape_mismatch: 'The AI response did not pass the grounding and safety checks.',

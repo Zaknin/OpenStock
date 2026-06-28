@@ -365,6 +365,231 @@ describe('validateSoxlAiModelExplanation', () => {
         expectIssue({ ...response(catalog), extra: true }, 'unexpected_top_level_fields', input);
     });
 
+    it.each([
+        ['a JSON string root', '"plain text"', 'root_not_object'],
+        ['trailing prose after JSON', () => `${JSON.stringify(response(catalogFor(evidence())))} trailing`, 'invalid_json'],
+        ['multiple JSON objects', () => `${JSON.stringify(response(catalogFor(evidence())))}${JSON.stringify(response(catalogFor(evidence())))}`, 'invalid_json'],
+    ] as const)('restores raw boundary rejection for %s', (_name, raw, issue) => {
+        const value = typeof raw === 'function' ? raw() : raw;
+        expect(validate(value)).toMatchObject({ valid: false, reason: issue });
+    });
+
+    it.each([
+        ['missing status', (catalog: SoxlAiEvidenceReferenceCatalog) => {
+            const value: Record<string, unknown> = { ...response(catalog) };
+            delete value.status;
+            return value;
+        }, 'missing_required_top_level_field', 'status'],
+        ['null status', (catalog: SoxlAiEvidenceReferenceCatalog) => ({ ...response(catalog), status: null }), 'nullable_contract_mismatch', 'status'],
+        ['number status', (catalog: SoxlAiEvidenceReferenceCatalog) => ({ ...response(catalog), status: 1 }), 'top_level_field_wrong_type', 'status'],
+        ['status mismatch', (catalog: SoxlAiEvidenceReferenceCatalog) => ({ ...response(catalog), status: 'partial' }), 'status_mismatch', 'status'],
+        ['unexpected root key', (catalog: SoxlAiEvidenceReferenceCatalog) => ({ ...response(catalog), extra: true }), 'unexpected_top_level_fields', undefined],
+    ] as const)('restores top-level status diagnostic: %s', (_name, buildValue, issue, field) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue(buildValue(catalog), issue, input, undefined, field);
+    });
+
+    it.each([
+        'summary',
+        'supportingEvidence',
+        'conflictingEvidence',
+        'riskReminders',
+        'limitations',
+    ] as const)('rejects missing required section %s', (section) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const value: Record<string, unknown> = { ...response(catalog) };
+        delete value[section];
+
+        expectIssue(value, 'section_missing', input, section);
+    });
+
+    it('rejects missing required section missingEvidence', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const value: Record<string, unknown> = { ...response(catalog) };
+        delete value.missingEvidence;
+
+        expectIssue(value, 'section_missing', input, 'missingEvidence');
+    });
+
+    it.each([
+        ['null section', null, 'section_not_array', undefined],
+        ['string section', 'not an array', 'section_not_array', undefined],
+        ['null section item', [null], 'section_item_not_object', undefined],
+        ['primitive section item', ['text'], 'section_item_not_object', undefined],
+        ['missing point text', [{ evidenceRefs: ['E001'] }], 'section_item_missing_required_field', 'text'],
+        ['number point text', [{ text: 1, evidenceRefs: ['E001'] }], 'section_item_field_wrong_type', 'text'],
+        ['null point text', [{ text: null, evidenceRefs: ['E001'] }], 'section_item_field_wrong_type', 'text'],
+        ['blank point text', [{ text: '   ', evidenceRefs: ['E001'] }], 'other_section_shape_mismatch', 'text'],
+        ['oversized point text', [{ text: 'x'.repeat(2_001), evidenceRefs: ['E001'] }], 'other_section_shape_mismatch', 'text'],
+        ['unexpected point key', [{ text: 'Text', evidenceRefs: ['E001'], extra: true }], 'section_item_unexpected_field', undefined],
+        ['missing evidenceRefs', [{ text: 'Text' }], 'evidence_refs_missing', 'evidenceRefs'],
+        ['string evidenceRefs', [{ text: 'Text', evidenceRefs: 'E001' }], 'evidence_refs_not_array', 'evidenceRefs'],
+        ['object evidenceRefs', [{ text: 'Text', evidenceRefs: { ref: 'E001' } }], 'evidence_refs_not_array', 'evidenceRefs'],
+        ['null evidenceRefs', [{ text: 'Text', evidenceRefs: null }], 'evidence_refs_not_array', 'evidenceRefs'],
+        ['empty evidenceRefs', [{ text: 'Text', evidenceRefs: [] }], 'evidence_refs_empty', 'evidenceRefs'],
+        ['non-string evidenceRef', [{ text: 'Text', evidenceRefs: [1] }], 'evidence_ref_not_string', 'evidenceRefs'],
+        ['object evidenceRef', [{ text: 'Text', evidenceRefs: [{ ref: 'E001' }] }], 'evidence_ref_not_string', 'evidenceRefs'],
+        ['blank evidenceRef', [{ text: 'Text', evidenceRefs: [''] }], 'evidence_ref_blank', 'evidenceRefs'],
+        ['whitespace evidenceRef', [{ text: 'Text', evidenceRefs: ['   '] }], 'evidence_ref_blank', 'evidenceRefs'],
+        ['duplicate evidenceRef', [{ text: 'Text', evidenceRefs: ['E001', 'E001'] }], 'evidence_ref_duplicate', 'evidenceRefs'],
+        ['too many evidenceRefs', [{ text: 'Text', evidenceRefs: Array.from({ length: 21 }, (_, index) => `E${String(index + 1).padStart(3, '0')}`) }], 'evidence_refs_too_many', 'evidenceRefs'],
+        ['canonical evidence ID', [{ text: 'Text', evidenceRefs: [availableId] }], 'evidence_ref_format_invalid', 'evidenceRefs'],
+    ] as const)('restores section item diagnostic: %s', (_name, sectionValue, issue, field) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue({
+            ...response(catalog),
+            summary: sectionValue,
+        }, issue, input, 'summary', field);
+    });
+
+    it('rejects sections with too many points', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue({
+            ...response(catalog),
+            summary: Array.from({ length: 51 }, () => point('Text', [availableId], catalog)),
+        }, 'section_too_many', input, 'summary');
+    });
+
+    it.each([
+        ['root snapshotIdentity', 'snapshotIdentity'],
+        ['root snapshotToken', 'snapshotToken'],
+        ['root provider', 'provider'],
+        ['root providerId', 'providerId'],
+        ['root asOf', 'asOf'],
+        ['root generatedAt', 'generatedAt'],
+    ] as const)('rejects server-owned metadata field %s', (_name, field) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue({
+            ...response(catalog),
+            [field]: 'raw-secret',
+        }, 'unexpected_server_metadata_field', input, undefined, field);
+    });
+
+    it.each([
+        ['item snapshotIdentity', 'snapshotIdentity'],
+        ['item snapshotToken', 'snapshotToken'],
+        ['item provider', 'provider'],
+        ['item providerId', 'providerId'],
+        ['item asOf', 'asOf'],
+        ['item generatedAt', 'generatedAt'],
+    ] as const)('rejects server-owned metadata field inside a point: %s', (_name, field) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue({
+            ...response(catalog),
+            summary: [{ ...point('Text', [availableId], catalog), [field]: 'raw-secret' }],
+        }, 'unexpected_server_metadata_field', input, undefined, field);
+    });
+
+    it.each([
+        ['available evidence cited as missing', () => evidence('partial', [missingId]), [availableId], 'invalid_missing_evidence_reference'],
+        ['unknown missing evidence is uncited', () => evidence('partial', [missingId]), [], 'uncited_missing_evidence'],
+        ['missing evidence section uses unsupported evidence', () => evidence('available'), [missingId], 'invalid_missing_evidence_reference'],
+    ] as const)('restores missing-evidence diagnostic: %s', (_name, buildInput, ids, issue) => {
+        const input = buildInput();
+        const catalog = catalogFor(input);
+
+        expectIssue(response(catalog, {
+            status: input.status,
+            summary: [],
+            missingEvidence: ids.map((id) => point('Missing.', [id], catalog)),
+        }), issue, input);
+    });
+
+    it.each([
+        'you should sell now',
+        'you should hold the trade',
+        'you should add here',
+        'you should reduce exposure',
+        'you should close it',
+        'you should exit now',
+        'buy now',
+        'sell now',
+        'close the position',
+        'exit the position',
+        'move the invalidation',
+        'move your target',
+        'place an order',
+        'recommended action is to wait',
+        'trade signal is active',
+        'trade decision is pending',
+    ] as const)('rejects directional recommendation phrase: %s', (text) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue(response(catalog, {
+            summary: [point(text, [availableId], catalog)],
+        }), 'forbidden_recommendation', input);
+    });
+
+    it.each([
+        'preferred scenario is continuation',
+        'The preferred scenario remains incomplete.',
+    ] as const)('rejects preferred-scenario selection phrase: %s', (text) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue(response(catalog, {
+            summary: [point(text, [availableId], catalog)],
+        }), 'forbidden_scenario_selection', input);
+    });
+
+    it.each([
+        'guaranteed outcome',
+        'probability percentage is not available',
+        'win-rate percentage is not available',
+        '90% confidence',
+        'probability is 80%',
+        'hidden score is 2',
+        'score is 4',
+    ] as const)('rejects prohibited scoring or probability phrase: %s', (text) => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expectIssue(response(catalog, {
+            summary: [point(text, [availableId], catalog)],
+        }), 'prohibited_content', input);
+    });
+
+    it('accepts all response sections when every point cites a valid alias', () => {
+        const input = evidence('partial', [missingId]);
+        const catalog = catalogFor(input);
+
+        expect(validate(response(catalog, {
+            status: 'partial',
+            summary: [point('Summary.', [availableId], catalog)],
+            supportingEvidence: [point('Support.', [availableId], catalog)],
+            conflictingEvidence: [point('Conflict.', [availableId], catalog)],
+            missingEvidence: [point('Missing.', [missingId], catalog)],
+            riskReminders: [point('Risk.', [availableId], catalog)],
+            limitations: [point('Limit.', [availableId], catalog)],
+        }), input)).toMatchObject({ valid: true });
+    });
+
+    it('returns fixed diagnostics without raw model text or alias leakage', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+        const result = validate({
+            ...response(catalog),
+            summary: [point('raw-secret 99.99', [availableId], catalog)],
+        }, input);
+
+        expect(result).toMatchObject({ valid: false, reason: 'ungrounded_numeric_claim' });
+        expect(JSON.stringify(result)).not.toContain('raw-secret');
+        expect(JSON.stringify(result)).not.toMatch(/E001|current\.market_facts/u);
+    });
+
     it('is deterministic and does not mutate evidence or the catalog', () => {
         const input = evidence('partial', [missingId]);
         const catalog = catalogFor(input);

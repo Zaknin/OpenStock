@@ -158,7 +158,6 @@ describe('buildSoxlAiExplanationView', () => {
             'evidence_ref_format_invalid',
             'evidence_ref_duplicate',
             'evidence_catalog_too_large',
-            'response_schema_too_large',
             'nullable_contract_mismatch',
             'empty_value_not_allowed',
             'other_shape_mismatch',

@@ -334,9 +334,46 @@ describe("callAIProvider", () => {
     await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
       code: "provider_timeout",
       providerId: "gemini",
+      category: "provider_timeout",
+      httpStatus: null,
       message: "AI provider request timed out.",
     });
   });
+
+  it.each([
+    [400, false, "bad_request"],
+    [400, true, "structured_output_rejected"],
+    [401, true, "authentication_failed"],
+    [403, true, "permission_denied"],
+    [404, true, "model_not_found"],
+    [429, true, "rate_limited"],
+    [503, true, "provider_unavailable"],
+  ] as const)(
+    "classifies Gemini HTTP %i with structured output %s as %s",
+    async (status, structuredOutput, category) => {
+      process.env.GEMINI_API_KEY = "test-gemini-key";
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      vi.stubGlobal("fetch", fetchMock(new Response("raw-provider-message", { status })));
+      const request = structuredOutput
+        ? {
+            systemInstruction: "system text",
+            userInstruction: "user text",
+            responseFormat: jsonResponseFormat,
+          }
+        : "plain prompt";
+
+      await expect(callAIProvider(request, "gemini")).rejects.toMatchObject({
+        code: "provider_http_error",
+        providerId: "gemini",
+        category,
+        httpStatus: status,
+        message: "AI provider request failed.",
+      });
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps HTTP failures safely without raw response body", async () => {
     process.env.GEMINI_API_KEY = "test-gemini-key";
@@ -346,6 +383,8 @@ describe("callAIProvider", () => {
       error instanceof AIProviderError
       && error.code === "provider_http_error"
       && error.providerId === "gemini"
+      && error.category === "provider_unavailable"
+      && error.httpStatus === 500
       && error.message === "AI provider request failed."
       && !error.message.includes("raw-secret-body")
     ));
@@ -358,6 +397,8 @@ describe("callAIProvider", () => {
     await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
       code: "provider_invalid_response",
       providerId: "gemini",
+      category: "invalid_provider_response",
+      httpStatus: null,
       message: "AI provider returned an invalid response.",
     });
   });
@@ -382,6 +423,8 @@ describe("callAIProvider", () => {
 
     await expect(callAIProvider("prompt", "siray")).rejects.toSatisfy((error: unknown) => (
       error instanceof AIProviderError
+      && error.category === "network_error"
+      && error.httpStatus === null
       && !error.message.includes("secret-siray-key")
       && !error.message.includes("https://secret.example")
       && !JSON.stringify(error).includes("secret-siray-key")
@@ -395,6 +438,8 @@ describe("callAIProvider", () => {
     await expect(callAIProvider("prompt", "minimax")).rejects.toSatisfy((error: unknown) => (
       error instanceof AIProviderError
       && error.message === "AI provider request failed."
+      && error.category === "authentication_failed"
+      && error.httpStatus === 401
       && !JSON.stringify(error).includes("secret-minimax-key")
     ));
     const init = vi.mocked(global.fetch).mock.calls[0][1] as RequestInit;

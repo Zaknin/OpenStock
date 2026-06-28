@@ -1,6 +1,7 @@
 import {
     AIProviderError,
-    callAIProviderWithFallbackDetailed,
+    callAIProviderDetailed,
+    type AIProviderFailureCategory,
     type AIProviderCallResult,
     type AIProviderStructuredRequest,
 } from '@/lib/ai-provider';
@@ -54,7 +55,7 @@ export interface GenerateSoxlAiExplanationDependencies {
     readonly callProvider?: SoxlAiProviderCall;
 }
 
-const defaultProviderCall: SoxlAiProviderCall = (request) => callAIProviderWithFallbackDetailed(request);
+const defaultProviderCall: SoxlAiProviderCall = (request) => callAIProviderDetailed(request);
 
 function addIssue(
     issues: SoxlAiExplanationServiceIssue[],
@@ -77,6 +78,22 @@ function providerIssue(error: unknown): SoxlAiExplanationServiceIssue {
     }
 
     return 'provider_error';
+}
+
+function logProviderFailure(error: unknown): void {
+    const providerId = error instanceof AIProviderError
+        ? error.providerId ?? 'unknown'
+        : 'unknown';
+    const category: AIProviderFailureCategory = error instanceof AIProviderError
+        ? error.category
+        : 'unknown_provider_error';
+    const httpStatus = error instanceof AIProviderError && error.httpStatus !== null
+        ? String(error.httpStatus)
+        : 'none';
+
+    console.warn(
+        `SOXL_AI_PROVIDER_FAILED provider=${providerId} category=${category} httpStatus=${httpStatus}`,
+    );
 }
 
 export function classifySoxlAiValidationRejectionReason(
@@ -139,16 +156,7 @@ export async function generateSoxlAiExplanation(
         };
     }
 
-    const responseFormatResult = buildSoxlAiModelExplanationResponseFormat(catalogResult.catalog);
-    if (!responseFormatResult.ok) {
-        return {
-            status: 'unavailable',
-            explanation: null,
-            issues: [responseFormatResult.issue],
-            providerId: null,
-        };
-    }
-
+    const responseFormat = buildSoxlAiModelExplanationResponseFormat();
     const prompt = buildSoxlAiPrompt(input.evidence, catalogResult.catalog);
     const callProvider = dependencies.callProvider ?? defaultProviderCall;
 
@@ -157,9 +165,10 @@ export async function generateSoxlAiExplanation(
         providerResult = normalizeProviderResult(await callProvider({
             systemInstruction: prompt.systemInstruction,
             userInstruction: prompt.userInstruction,
-            responseFormat: responseFormatResult.responseFormat,
+            responseFormat,
         }));
     } catch (error) {
+        logProviderFailure(error);
         return {
             status: 'unavailable',
             explanation: null,

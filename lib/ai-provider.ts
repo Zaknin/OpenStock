@@ -53,15 +53,41 @@ export type AIProviderErrorCode =
   | 'provider_invalid_response'
   | 'all_providers_failed';
 
+export type AIProviderFailureCategory =
+  | 'bad_request'
+  | 'structured_output_rejected'
+  | 'authentication_failed'
+  | 'permission_denied'
+  | 'model_not_found'
+  | 'rate_limited'
+  | 'provider_timeout'
+  | 'provider_unavailable'
+  | 'network_error'
+  | 'invalid_provider_response'
+  | 'unknown_provider_error';
+
+export interface AIProviderErrorOptions {
+  readonly category?: AIProviderFailureCategory;
+  readonly httpStatus?: number | null;
+}
+
 export class AIProviderError extends Error {
   readonly code: AIProviderErrorCode;
   readonly providerId: string | null;
+  readonly category: AIProviderFailureCategory;
+  readonly httpStatus: number | null;
 
-  constructor(code: AIProviderErrorCode, providerId: string | null) {
+  constructor(
+    code: AIProviderErrorCode,
+    providerId: string | null,
+    options: AIProviderErrorOptions = {},
+  ) {
     super(providerErrorMessage(code));
     this.name = 'AIProviderError';
     this.code = code;
     this.providerId = providerId;
+    this.category = options.category ?? defaultFailureCategory(code);
+    this.httpStatus = options.httpStatus ?? null;
   }
 }
 
@@ -80,6 +106,55 @@ function providerErrorMessage(code: AIProviderErrorCode): string {
     case 'all_providers_failed':
       return 'All AI providers failed.';
   }
+}
+
+function defaultFailureCategory(code: AIProviderErrorCode): AIProviderFailureCategory {
+  if (code === 'provider_timeout') {
+    return 'provider_timeout';
+  }
+
+  if (code === 'provider_invalid_response') {
+    return 'invalid_provider_response';
+  }
+
+  return 'unknown_provider_error';
+}
+
+function httpFailureCategory(
+  status: number,
+  structuredOutputSupplied: boolean,
+): AIProviderFailureCategory {
+  if (status === 400) {
+    return structuredOutputSupplied ? 'structured_output_rejected' : 'bad_request';
+  }
+  if (status === 401) {
+    return 'authentication_failed';
+  }
+  if (status === 403) {
+    return 'permission_denied';
+  }
+  if (status === 404) {
+    return 'model_not_found';
+  }
+  if (status === 429) {
+    return 'rate_limited';
+  }
+  if (status >= 500 && status <= 599) {
+    return 'provider_unavailable';
+  }
+
+  return 'unknown_provider_error';
+}
+
+function providerHttpError(
+  providerId: AIProviderName,
+  status: number,
+  structuredOutputSupplied: boolean,
+): AIProviderError {
+  return new AIProviderError('provider_http_error', providerId, {
+    category: httpFailureCategory(status, structuredOutputSupplied),
+    httpStatus: status,
+  });
 }
 
 export function getProviderConfig(
@@ -153,10 +228,14 @@ function asProviderError(error: unknown, providerId: AIProviderName): AIProvider
     && 'name' in error
     && (error as { readonly name?: unknown }).name === 'AbortError'
   ) {
-    return new AIProviderError('provider_timeout', providerId);
+    return new AIProviderError('provider_timeout', providerId, {
+      category: 'provider_timeout',
+    });
   }
 
-  return new AIProviderError('provider_http_error', providerId);
+  return new AIProviderError('provider_http_error', providerId, {
+    category: 'network_error',
+  });
 }
 
 async function fetchWithTimeout(
@@ -239,7 +318,11 @@ async function callGemini(
   }, config.name);
 
   if (!res.ok) {
-    throw new AIProviderError('provider_http_error', config.name);
+    throw providerHttpError(
+      config.name,
+      res.status,
+      isStructuredRequest(request) && request.responseFormat !== undefined,
+    );
   }
 
   const data: unknown = await res.json();
@@ -253,7 +336,9 @@ async function callGemini(
   );
 
   if (!text) {
-    throw new AIProviderError('provider_invalid_response', config.name);
+    throw new AIProviderError('provider_invalid_response', config.name, {
+      category: 'invalid_provider_response',
+    });
   }
 
   return text;
@@ -279,7 +364,7 @@ async function callOpenAICompatible(
   }, config.name);
 
   if (!res.ok) {
-    throw new AIProviderError('provider_http_error', config.name);
+    throw providerHttpError(config.name, res.status, false);
   }
 
   const data: unknown = await res.json();
@@ -293,7 +378,9 @@ async function callOpenAICompatible(
   );
 
   if (!text) {
-    throw new AIProviderError('provider_invalid_response', config.name);
+    throw new AIProviderError('provider_invalid_response', config.name, {
+      category: 'invalid_provider_response',
+    });
   }
 
   return text;
