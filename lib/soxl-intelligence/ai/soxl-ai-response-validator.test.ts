@@ -181,6 +181,44 @@ describe('validateSoxlAiModelExplanation', () => {
         )).toMatchObject({ valid: true });
     });
 
+    it.each([1, 8])('accepts a valid summary with %i unique evidence references', (referenceCount) => {
+        const base = evidence();
+        const ids = [
+            availableId,
+            ...Array.from(
+                { length: 7 },
+                (_, index) => `current.market_facts.synthetic_${index + 1}.value`,
+            ),
+        ];
+        const input: SoxlAiEvidencePackage = {
+            ...base,
+            items: ids.map((id, index) => ({
+                ...base.items[0],
+                id,
+                sourcePath: `facts.synthetic.${index + 1}.value`,
+                label: `Synthetic deterministic fact ${index + 1}`,
+                value: `available-${index + 1}`,
+            })),
+            groups: {
+                ...base.groups,
+                currentMarketFacts: ids,
+                currentAssessment: [],
+            },
+        };
+        const catalog = catalogFor(input);
+        const evidenceRefs = catalog.entries
+            .slice(0, referenceCount)
+            .map(({ alias }) => alias);
+        const result = validateSoxlAiModelExplanation(JSON.stringify(response(catalog, {
+            summary: [{ text: 'The cited deterministic facts are available.', evidenceRefs }],
+        })), input, catalog);
+
+        expect(result).toMatchObject({ valid: true });
+        if (result.valid) {
+            expect(result.value.summary[0].evidenceIds).toHaveLength(referenceCount);
+        }
+    });
+
     it.each([
         ['empty response', '', 'empty_response'],
         ['oversized response', `{${' '.repeat(65_536)}}`, 'response_too_large'],
