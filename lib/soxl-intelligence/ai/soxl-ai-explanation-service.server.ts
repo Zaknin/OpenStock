@@ -1,5 +1,6 @@
 import {
     AIProviderError,
+    AI_PROVIDER_MAX_TIMEOUT_MS,
     callAIProviderDetailed,
     type AIProviderFailureCategory,
     type AIProviderCallResult,
@@ -56,6 +57,7 @@ export interface GenerateSoxlAiExplanationDependencies {
 }
 
 const defaultProviderCall: SoxlAiProviderCall = (request) => callAIProviderDetailed(request);
+const SOXL_AI_PROVIDER_TIMEOUT_MS = AI_PROVIDER_MAX_TIMEOUT_MS;
 
 function addIssue(
     issues: SoxlAiExplanationServiceIssue[],
@@ -166,6 +168,7 @@ export async function generateSoxlAiExplanation(
             systemInstruction: prompt.systemInstruction,
             userInstruction: prompt.userInstruction,
             responseFormat,
+            timeoutMs: SOXL_AI_PROVIDER_TIMEOUT_MS,
         }));
     } catch (error) {
         logProviderFailure(error);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AIProviderError,
+  AI_PROVIDER_MAX_TIMEOUT_MS,
   AI_PROVIDER_TIMEOUT_MS,
   callAIProvider,
   callAIProviderDetailed,
@@ -46,6 +47,10 @@ function fetchMock(response: Response): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue(response);
 }
 
+function transportError(code: string): Error {
+  return Object.assign(new Error("raw transport details"), { cause: { code } });
+}
+
 function requestBody(callIndex = 0): Record<string, unknown> {
   const fetch = vi.mocked(global.fetch);
   const init = fetch.mock.calls[callIndex]?.[1] as RequestInit;
@@ -78,6 +83,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   process.env = { ...originalEnv };
 });
 
@@ -436,6 +442,135 @@ describe("callAIProvider", () => {
     });
   });
 
+  it("keeps the default provider timeout unchanged for existing callers", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
+
+    await callAIProvider("prompt", "gemini");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), AI_PROVIDER_TIMEOUT_MS);
+  });
+
+  it("uses a custom structured timeout without serializing it into the Gemini request", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
+
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      responseFormat: jsonResponseFormat,
+      timeoutMs: AI_PROVIDER_MAX_TIMEOUT_MS,
+    }, "gemini");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), AI_PROVIDER_MAX_TIMEOUT_MS);
+    expect(requestBody()).not.toHaveProperty("timeoutMs");
+    expect(requestBody().generationConfig).toHaveProperty("responseJsonSchema");
+  });
+
+  it("caps custom structured timeouts at the source-controlled maximum", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    vi.stubGlobal("fetch", fetchMock(jsonResponse(geminiBody())));
+
+    await callAIProvider({
+      systemInstruction: "system text",
+      userInstruction: "user text",
+      timeoutMs: AI_PROVIDER_MAX_TIMEOUT_MS + 30_000,
+    }, "gemini");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), AI_PROVIDER_MAX_TIMEOUT_MS);
+  });
+
+  it("classifies the application abort signal as provider_timeout without relying on message text", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+    const fetch = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal;
+      signal.addEventListener("abort", () => {
+        expect(signal.aborted).toBe(true);
+        reject(Object.assign(new Error("message without timeout keyword"), { name: "TypeError" }));
+      });
+    }));
+    vi.stubGlobal("fetch", fetch);
+
+    const request = expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_timeout",
+      providerId: "gemini",
+      category: "provider_timeout",
+      message: "AI provider request timed out.",
+    });
+    await vi.advanceTimersByTimeAsync(AI_PROVIDER_TIMEOUT_MS);
+
+    await request;
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps allowlisted timeout-shaped error names to provider_timeout", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(Object.assign(new Error("opaque"), { name: "TimeoutError" })),
+    );
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_timeout",
+      category: "provider_timeout",
+    });
+  });
+
+  it("clears timeout resources on HTTP failure", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+    vi.stubGlobal("fetch", fetchMock(new Response("raw body", { status: 503 })));
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_http_error",
+      category: "provider_unavailable",
+    });
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  it("clears timeout resources on transport failure", async () => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(transportError("ENOTFOUND")));
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toMatchObject({
+      code: "provider_http_error",
+      category: "dns_failure",
+    });
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ENOTFOUND", "dns_failure"],
+    ["ERR_TLS_CERT_ALTNAME_INVALID", "tls_failure"],
+    ["ECONNREFUSED", "connection_refused"],
+    ["ECONNRESET", "connection_reset"],
+    ["ETIMEDOUT", "socket_timeout"],
+    ["ENETUNREACH", "network_unreachable"],
+    ["UNKNOWN_CODE", "network_error"],
+  ] as const)("maps transport cause %s to %s", async (code, category) => {
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+    const fetch = vi.fn().mockRejectedValue(transportError(code));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(callAIProvider("prompt", "gemini")).rejects.toSatisfy((error: unknown) => (
+      error instanceof AIProviderError
+      && error.code === "provider_http_error"
+      && error.providerId === "gemini"
+      && error.category === category
+      && error.httpStatus === null
+      && error.message === "AI provider request failed."
+      && !JSON.stringify(error).includes("raw transport details")
+    ));
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     [400, false, "bad_request"],
     [400, true, "structured_output_rejected"],
@@ -556,6 +691,7 @@ describe("callAIProvider", () => {
 
   it("uses the fixed provider timeout constant", () => {
     expect(AI_PROVIDER_TIMEOUT_MS).toBe(30_000);
+    expect(AI_PROVIDER_MAX_TIMEOUT_MS).toBe(60_000);
   });
 });
 

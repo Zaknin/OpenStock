@@ -11,6 +11,7 @@ export interface AIProviderStructuredRequest {
   readonly systemInstruction: string;
   readonly userInstruction: string;
   readonly responseFormat?: AIProviderResponseFormat;
+  readonly timeoutMs?: number;
 }
 
 export type AIProviderRequest =
@@ -83,6 +84,12 @@ export type AIProviderFailureCategory =
   | 'provider_timeout'
   | 'provider_unavailable'
   | 'structured_schema_invalid'
+  | 'dns_failure'
+  | 'tls_failure'
+  | 'connection_refused'
+  | 'connection_reset'
+  | 'socket_timeout'
+  | 'network_unreachable'
   | 'network_error'
   | 'invalid_provider_response'
   | 'unknown_provider_error';
@@ -113,6 +120,9 @@ export class AIProviderError extends Error {
 }
 
 export const AI_PROVIDER_TIMEOUT_MS = 30_000;
+export const AI_PROVIDER_MAX_TIMEOUT_MS = 60_000;
+
+const AI_PROVIDER_TIMEOUT_ABORT_REASON = 'openstock_ai_provider_timeout';
 
 function providerErrorMessage(code: AIProviderErrorCode): string {
   switch (code) {
@@ -358,30 +368,149 @@ function isStructuredRequest(request: AIProviderRequest): request is AIProviderS
   return typeof request !== 'string';
 }
 
+function providerRequestTimeoutMs(request: AIProviderRequest): number {
+  if (!isStructuredRequest(request) || request.timeoutMs === undefined) {
+    return AI_PROVIDER_TIMEOUT_MS;
+  }
+
+  if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0) {
+    return AI_PROVIDER_TIMEOUT_MS;
+  }
+
+  return Math.min(Math.trunc(request.timeoutMs), AI_PROVIDER_MAX_TIMEOUT_MS);
+}
+
 function ensureConfigured(config: AIProviderConfig): void {
   if (!config.apiKey) {
     throw new AIProviderError('provider_not_configured', config.name);
   }
 }
 
-function asProviderError(error: unknown, providerId: AIProviderName): AIProviderError {
+interface ProviderTransportContext {
+  readonly signal: AbortSignal;
+  readonly timedOut: boolean;
+  readonly timeoutMs: number;
+  readonly elapsedMs: number;
+}
+
+function objectValue(value: unknown, key: string): unknown {
+  if (typeof value !== 'object' || value === null || !(key in value)) {
+    return undefined;
+  }
+
+  return (value as Record<string, unknown>)[key];
+}
+
+function stringObjectValue(value: unknown, key: string): string | null {
+  const found = objectValue(value, key);
+  return typeof found === 'string' ? found : null;
+}
+
+function errorCauseCode(error: unknown): string | null {
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    const directCode = stringObjectValue(current, 'code');
+    if (directCode !== null) {
+      return directCode;
+    }
+
+    current = objectValue(current, 'cause');
+    if (current === undefined || current === null) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function isApplicationTimeout(
+  error: unknown,
+  context?: ProviderTransportContext,
+): boolean {
+  const errorName = stringObjectValue(error, 'name');
+  if (errorName === 'AbortError' || errorName === 'TimeoutError') {
+    return true;
+  }
+
+  if (context === undefined) {
+    return false;
+  }
+
+  if (context.timedOut) {
+    return true;
+  }
+
+  if (
+    context.signal.aborted
+    && context.signal.reason === AI_PROVIDER_TIMEOUT_ABORT_REASON
+  ) {
+    return true;
+  }
+
+  return context.signal.aborted && context.elapsedMs >= context.timeoutMs - 250;
+}
+
+function transportFailureCategory(
+  error: unknown,
+  context?: ProviderTransportContext,
+): AIProviderFailureCategory {
+  if (isApplicationTimeout(error, context)) {
+    return 'provider_timeout';
+  }
+
+  const code = errorCauseCode(error);
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'dns_failure';
+  }
+  if (
+    code === 'ERR_TLS_CERT_ALTNAME_INVALID'
+    || code === 'DEPTH_ZERO_SELF_SIGNED_CERT'
+    || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'
+    || code?.startsWith('ERR_TLS_') === true
+    || code?.startsWith('ERR_SSL_') === true
+  ) {
+    return 'tls_failure';
+  }
+  if (code === 'ECONNREFUSED') {
+    return 'connection_refused';
+  }
+  if (code === 'ECONNRESET') {
+    return 'connection_reset';
+  }
+  if (
+    code === 'ETIMEDOUT'
+    || code === 'UND_ERR_CONNECT_TIMEOUT'
+    || code === 'UND_ERR_HEADERS_TIMEOUT'
+    || code === 'UND_ERR_BODY_TIMEOUT'
+  ) {
+    return 'socket_timeout';
+  }
+  if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
+    return 'network_unreachable';
+  }
+
+  return 'network_error';
+}
+
+function asProviderError(
+  error: unknown,
+  providerId: AIProviderName,
+  context?: ProviderTransportContext,
+): AIProviderError {
   if (error instanceof AIProviderError) {
     return error;
   }
 
-  if (
-    typeof error === 'object'
-    && error !== null
-    && 'name' in error
-    && (error as { readonly name?: unknown }).name === 'AbortError'
-  ) {
+  const category = transportFailureCategory(error, context);
+  if (category === 'provider_timeout') {
     return new AIProviderError('provider_timeout', providerId, {
-      category: 'provider_timeout',
+      category,
     });
   }
 
   return new AIProviderError('provider_http_error', providerId, {
-    category: 'network_error',
+    category,
   });
 }
 
@@ -389,9 +518,15 @@ async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   providerId: AIProviderName,
+  timeoutMs: number = AI_PROVIDER_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), AI_PROVIDER_TIMEOUT_MS);
+  const startedAt = Date.now();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort(AI_PROVIDER_TIMEOUT_ABORT_REASON);
+  }, timeoutMs);
 
   try {
     return await fetch(url, {
@@ -399,7 +534,12 @@ async function fetchWithTimeout(
       signal: controller.signal,
     });
   } catch (error) {
-    throw asProviderError(error, providerId);
+    throw asProviderError(error, providerId, {
+      signal: controller.signal,
+      timedOut,
+      timeoutMs,
+      elapsedMs: Date.now() - startedAt,
+    });
   } finally {
     clearTimeout(timeoutId);
   }
@@ -462,7 +602,7 @@ async function callGemini(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(geminiBody(request, config.name)),
-  }, config.name);
+  }, config.name, providerRequestTimeoutMs(request));
 
   if (!res.ok) {
     throw providerHttpError(
@@ -508,7 +648,7 @@ async function callOpenAICompatible(
       messages: openAiMessages(request),
       temperature: 0.7,
     }),
-  }, config.name);
+  }, config.name, providerRequestTimeoutMs(request));
 
   if (!res.ok) {
     throw providerHttpError(config.name, res.status, false);

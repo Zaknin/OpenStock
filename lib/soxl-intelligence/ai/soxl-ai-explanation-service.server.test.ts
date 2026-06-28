@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AIProviderError, type AIProviderName } from '@/lib/ai-provider';
+import { AIProviderError, AI_PROVIDER_MAX_TIMEOUT_MS, type AIProviderName } from '@/lib/ai-provider';
 import type { SoxlAiEvidencePackage } from './soxl-ai-evidence';
 import type { SoxlAiExplanationResponse, SoxlAiModelExplanation } from './soxl-ai-prompt';
 import {
@@ -161,6 +161,7 @@ describe('generateSoxlAiExplanation', () => {
         });
         expect(callProvider).toHaveBeenCalledTimes(1);
         const request = callProvider.mock.calls[0][0];
+        expect(request.timeoutMs).toBe(AI_PROVIDER_MAX_TIMEOUT_MS);
         expect(request.userInstruction).toContain('"ref": "E001"');
         expect(request.userInstruction).not.toContain(availableId);
         expect(request.responseFormat).toMatchObject({
