@@ -3,8 +3,6 @@ import {
     AI_PROVIDER_MAX_TIMEOUT_MS,
     callAIProviderDetailed,
     type AIProviderFailureCategory,
-    type AIProviderCallResult,
-    type AIProviderStructuredRequest,
 } from '@/lib/ai-provider';
 import type {
     SoxlAiEvidencePackage,
@@ -13,6 +11,20 @@ import {
     buildSoxlAiEvidenceReferenceCatalog,
 } from './soxl-ai-evidence-reference-catalog.server';
 import {
+    fallbackReasonForPrimaryError,
+    isSoxlAiLocalRoutingEnabled,
+    noteSoxlAiPrimaryFailure,
+    noteSoxlAiPrimarySuccess,
+    resolveSoxlAiLocalProviderRoute,
+    type SoxlAiLocalProviderRequest,
+    type SoxlAiPrimaryFallbackReason,
+    type SoxlAiProviderCandidate,
+    type SoxlAiProviderRoutePlan,
+    type SoxlAiProviderRouteResolver,
+    type SoxlAiProviderRole,
+} from './soxl-ai-local-provider-router.server';
+import {
+    buildSoxlAiModelExplanationResponseFormat,
     buildSoxlAiPrompt,
     type SoxlAiExplanationResponse,
 } from './soxl-ai-prompt';
@@ -39,11 +51,19 @@ export interface SoxlAiExplanationServiceResult {
     readonly explanation: SoxlAiExplanationResponse | null;
     readonly issues: readonly SoxlAiExplanationServiceIssue[];
     readonly providerId: string | null;
+    readonly providerRole?: SoxlAiProviderRole | 'default' | null;
+    readonly fallbackUsed?: boolean;
+    readonly fallbackReason?: SoxlAiPrimaryFallbackReason | null;
+}
+
+export interface SoxlAiProviderCallResult {
+    readonly providerId: string;
+    readonly text: string;
 }
 
 export type SoxlAiProviderCall = (
-    request: AIProviderStructuredRequest,
-) => Promise<string | AIProviderCallResult>;
+    request: SoxlAiLocalProviderRequest,
+) => Promise<string | SoxlAiProviderCallResult>;
 
 export interface GenerateSoxlAiExplanationInput {
     readonly evidence: SoxlAiEvidencePackage;
@@ -51,6 +71,7 @@ export interface GenerateSoxlAiExplanationInput {
 
 export interface GenerateSoxlAiExplanationDependencies {
     readonly callProvider?: SoxlAiProviderCall;
+    readonly resolveProviderRoute?: SoxlAiProviderRouteResolver;
 }
 
 const defaultProviderCall: SoxlAiProviderCall = (request) => callAIProviderDetailed(request);
@@ -95,6 +116,17 @@ function logProviderFailure(error: unknown): void {
     );
 }
 
+function logProviderRoute(
+    providerId: string,
+    role: SoxlAiProviderRole | 'default',
+    fallbackUsed: boolean,
+    fallbackReason: SoxlAiPrimaryFallbackReason | null,
+): void {
+    console.info(
+        `SOXL_AI_ROUTE provider=${providerId} role=${role} fallbackUsed=${String(fallbackUsed)} reason=${fallbackReason ?? 'none'}`,
+    );
+}
+
 export function classifySoxlAiValidationRejectionReason(
     validation: SoxlAiResponseValidationFailure,
 ): Pick<
@@ -121,8 +153,8 @@ export function classifySoxlAiValidationRejectionReason(
 }
 
 function normalizeProviderResult(
-    result: string | AIProviderCallResult,
-): AIProviderCallResult | { readonly providerId: null; readonly text: string } {
+    result: string | SoxlAiProviderCallResult,
+): SoxlAiProviderCallResult | { readonly providerId: null; readonly text: string } {
     if (typeof result === 'string') {
         return {
             providerId: null,
@@ -157,6 +189,102 @@ function trustedSnapshotIdentity(
     };
 }
 
+interface ProviderAttempt {
+    readonly providerId: string | null;
+    readonly role: SoxlAiProviderRole | 'default';
+    readonly strictStructuredOutput: boolean;
+    readonly call: SoxlAiProviderCall;
+}
+
+interface ProviderAttemptPlan {
+    readonly attempts: readonly ProviderAttempt[];
+    readonly initialFallbackReason: SoxlAiPrimaryFallbackReason | null;
+    readonly routed: boolean;
+}
+
+function routedAttempt(candidate: SoxlAiProviderCandidate): ProviderAttempt {
+    return {
+        providerId: candidate.providerId,
+        role: candidate.role,
+        strictStructuredOutput: candidate.strictStructuredOutput,
+        call: candidate.call,
+    };
+}
+
+function routedPlan(plan: SoxlAiProviderRoutePlan): ProviderAttemptPlan {
+    return {
+        attempts: plan.attempts.map(routedAttempt),
+        initialFallbackReason: plan.initialFallbackReason,
+        routed: true,
+    };
+}
+
+async function providerAttemptPlan(
+    dependencies: GenerateSoxlAiExplanationDependencies,
+): Promise<ProviderAttemptPlan> {
+    if (dependencies.callProvider !== undefined) {
+        return {
+            attempts: [{
+                providerId: null,
+                role: 'default',
+                strictStructuredOutput: false,
+                call: dependencies.callProvider,
+            }],
+            initialFallbackReason: null,
+            routed: false,
+        };
+    }
+
+    if (dependencies.resolveProviderRoute !== undefined) {
+        return routedPlan(await dependencies.resolveProviderRoute());
+    }
+
+    if (isSoxlAiLocalRoutingEnabled()) {
+        return routedPlan(await resolveSoxlAiLocalProviderRoute());
+    }
+
+    return {
+        attempts: [{
+            providerId: null,
+            role: 'default',
+            strictStructuredOutput: false,
+            call: defaultProviderCall,
+        }],
+        initialFallbackReason: null,
+        routed: false,
+    };
+}
+
+function providerRequest(
+    prompt: ReturnType<typeof buildSoxlAiPrompt>,
+    aliases: readonly string[],
+    strictStructuredOutput: boolean,
+): SoxlAiLocalProviderRequest {
+    const base: SoxlAiLocalProviderRequest = {
+        systemInstruction: prompt.systemInstruction,
+        userInstruction: prompt.userInstruction,
+        responseMimeType: 'application/json',
+        timeoutMs: SOXL_AI_PROVIDER_TIMEOUT_MS,
+    };
+
+    if (!strictStructuredOutput) {
+        return base;
+    }
+
+    return {
+        ...base,
+        responseFormat: buildSoxlAiModelExplanationResponseFormat(),
+        allowedEvidenceRefs: aliases,
+    };
+}
+
+function hasFallbackAfter(
+    attempts: readonly ProviderAttempt[],
+    index: number,
+): boolean {
+    return attempts.slice(index + 1).some(({ role }) => role === 'fallback');
+}
+
 export async function generateSoxlAiExplanation(
     input: GenerateSoxlAiExplanationInput,
     dependencies: GenerateSoxlAiExplanationDependencies = {},
@@ -172,16 +300,10 @@ export async function generateSoxlAiExplanation(
     }
 
     const prompt = buildSoxlAiPrompt(input.evidence, catalogResult.catalog);
-    const callProvider = dependencies.callProvider ?? defaultProviderCall;
-
-    let providerResult: AIProviderCallResult | { readonly providerId: null; readonly text: string };
+    const aliases = catalogResult.catalog.entries.map(({ alias }) => alias);
+    let plan: ProviderAttemptPlan;
     try {
-        providerResult = normalizeProviderResult(await callProvider({
-            systemInstruction: prompt.systemInstruction,
-            userInstruction: prompt.userInstruction,
-            responseMimeType: 'application/json',
-            timeoutMs: SOXL_AI_PROVIDER_TIMEOUT_MS,
-        }));
+        plan = await providerAttemptPlan(dependencies);
     } catch (error) {
         logProviderFailure(error);
         return {
@@ -192,31 +314,102 @@ export async function generateSoxlAiExplanation(
         };
     }
 
-    const validation = validateSoxlAiModelExplanation(
-        providerResult.text,
-        input.evidence,
-        catalogResult.catalog,
-    );
-    if (!validation.valid) {
-        const issues: SoxlAiExplanationServiceIssue[] = [];
-        validation.issues.forEach((issue) => addIssue(issues, issue));
-        const rejection = classifySoxlAiValidationRejectionReason(validation);
-        logValidationRejection(providerResult.providerId, rejection);
+    const issues: SoxlAiExplanationServiceIssue[] = [];
+    let fallbackReason = plan.initialFallbackReason;
+    let lastProviderId: string | null = null;
+    let lastProviderRole: SoxlAiProviderRole | 'default' | null = null;
+
+    for (let index = 0; index < plan.attempts.length; index += 1) {
+        const attempt = plan.attempts[index];
+        const request = providerRequest(
+            prompt,
+            aliases,
+            attempt.strictStructuredOutput,
+        );
+        let providerResult: SoxlAiProviderCallResult | {
+            readonly providerId: null;
+            readonly text: string;
+        };
+
+        try {
+            providerResult = normalizeProviderResult(await attempt.call(request));
+        } catch (error) {
+            logProviderFailure(error);
+            addIssue(issues, providerIssue(error));
+            lastProviderId = error instanceof AIProviderError
+                ? error.providerId
+                : attempt.providerId;
+            lastProviderRole = attempt.role;
+
+            if (attempt.role === 'primary' && hasFallbackAfter(plan.attempts, index)) {
+                fallbackReason = fallbackReasonForPrimaryError(error);
+                noteSoxlAiPrimaryFailure(fallbackReason);
+                continue;
+            }
+
+            break;
+        }
+
+        lastProviderId = providerResult.providerId ?? attempt.providerId;
+        lastProviderRole = attempt.role;
+        const validation = validateSoxlAiModelExplanation(
+            providerResult.text,
+            input.evidence,
+            catalogResult.catalog,
+        );
+        if (!validation.valid) {
+            validation.issues.forEach((issue) => addIssue(issues, issue));
+            const rejection = classifySoxlAiValidationRejectionReason(validation);
+            logValidationRejection(lastProviderId, rejection);
+
+            if (attempt.role === 'primary' && hasFallbackAfter(plan.attempts, index)) {
+                fallbackReason = 'primary_validation_rejected';
+                noteSoxlAiPrimaryFailure(fallbackReason);
+                continue;
+            }
+
+            break;
+        }
+
+        if (attempt.role === 'primary') {
+            noteSoxlAiPrimarySuccess();
+        }
+
+        const fallbackUsed = attempt.role === 'fallback';
+        if (plan.routed) {
+            logProviderRoute(
+                lastProviderId ?? attempt.providerId ?? 'unknown',
+                attempt.role,
+                fallbackUsed,
+                fallbackUsed ? fallbackReason : null,
+            );
+        }
+
         return {
-            status: 'unavailable',
-            explanation: null,
-            issues,
-            providerId: providerResult.providerId,
+            status: 'available',
+            explanation: {
+                ...validation.value,
+                snapshotIdentity: trustedSnapshotIdentity(input.evidence),
+            },
+            issues: [],
+            providerId: lastProviderId,
+            ...(plan.routed ? {
+                providerRole: attempt.role,
+                fallbackUsed,
+                fallbackReason: fallbackUsed ? fallbackReason : null,
+            } : {}),
         };
     }
 
     return {
-        status: 'available',
-        explanation: {
-            ...validation.value,
-            snapshotIdentity: trustedSnapshotIdentity(input.evidence),
-        },
-        issues: [],
-        providerId: providerResult.providerId,
+        status: 'unavailable',
+        explanation: null,
+        issues: issues.length === 0 ? ['provider_error'] : issues,
+        providerId: lastProviderId,
+        ...(plan.routed ? {
+            providerRole: lastProviderRole,
+            fallbackUsed: lastProviderRole === 'fallback',
+            fallbackReason,
+        } : {}),
     };
 }
