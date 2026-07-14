@@ -177,6 +177,8 @@ describe('buildSoxlAiPrompt', () => {
         expect(instruction).toContain('fabricated prices');
         expect(instruction).toContain('confidence percentage');
         expect(instruction).toContain('buy, sell, hold, add, reduce, close, exit now');
+        expect(instruction).toContain('Summary text must remain qualitative');
+        expect(instruction).toContain('Do not include numerals, percentages, prices, dates, basis points, indicator values');
     });
 
     it('keeps the exact structured response keys without a catch-all prose field', () => {

@@ -460,6 +460,16 @@ describe('validateSoxlAiModelExplanation', () => {
         }), 'ungrounded_numeric_claim', input);
     });
 
+    it('accepts a qualitative summary with a grounded numeric evidence detail', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expect(validate(response(catalog, {
+            summary: [point('The latest completed close is available.', [availableId], catalog)],
+            supportingEvidence: [point('The completed close is 27.12.', [availableId], catalog)],
+        }), input)).toMatchObject({ valid: true });
+    });
+
     it('rejects server metadata at root and inside section items', () => {
         const input = evidence();
         const catalog = catalogFor(input);

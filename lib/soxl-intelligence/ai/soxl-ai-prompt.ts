@@ -172,6 +172,7 @@ const systemInstruction = [
     'Cite evidence aliases for every factual statement. Every alias you return must exist in evidence.items[].ref and materially support the specific item that cites it.',
     'Do not invent source paths, markdown citations, URLs, footnotes, or evidence aliases.',
     'Do not make a factual numeric statement without an evidence reference.',
+    'Summary text must remain qualitative. Do not include numerals, percentages, prices, dates, basis points, indicator values, or other quantified claims in summary. Put every quantified fact in a supporting, conflicting, missing-evidence, risk-reminder, or limitation item with direct evidenceRefs.',
     'Missing-evidence statements must cite the relevant unknown or unavailable evidence item.',
     'Generic limitations should cite a relevant status, issue, or availability item where possible.',
     'Use empty arrays for sections that are not applicable.',

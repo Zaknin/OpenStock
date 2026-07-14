@@ -459,41 +459,43 @@ function normalizedOpenAiSchema(schema: AIProviderJsonSchema): Record<string, un
     return normalized;
 }
 
-function strictLocalSchema(
-    schema: AIProviderJsonSchema,
-    allowedEvidenceRefs: readonly string[],
-): Record<string, unknown> {
-    const normalized = normalizedOpenAiSchema(schema);
-    const properties = normalized.properties;
-    if (typeof properties !== 'object' || properties === null) {
-        return normalized;
+function compatibleSchemaNode(value: unknown): Record<string, unknown> {
+    const type = objectValue(value, 'type');
+    const node: Record<string, unknown> = {};
+
+    if (typeof type === 'string') {
+        node.type = type;
     }
 
-    Object.values(properties as Record<string, unknown>).forEach((sectionSchema) => {
-        if (typeof sectionSchema !== 'object' || sectionSchema === null) {
-            return;
-        }
-        const pointSchema = objectValue(sectionSchema, 'items');
-        const pointProperties = objectValue(pointSchema, 'properties');
-        const refsSchema = objectValue(pointProperties, 'evidenceRefs');
-        if (typeof refsSchema !== 'object' || refsSchema === null) {
-            return;
-        }
+    const properties = objectValue(value, 'properties');
+    if (typeof properties === 'object' && properties !== null) {
+        node.properties = Object.fromEntries(
+            Object.entries(properties as Record<string, unknown>)
+                .map(([key, property]) => [key, compatibleSchemaNode(property)]),
+        );
+    }
 
-        const itemSchema: Record<string, unknown> = {
-            type: 'string',
-        };
-        if (allowedEvidenceRefs.length > 0) {
-            itemSchema.enum = allowedEvidenceRefs;
-        }
+    const required = objectValue(value, 'required');
+    if (Array.isArray(required) && required.every((key) => typeof key === 'string')) {
+        node.required = required;
+    }
 
-        Object.assign(refsSchema, {
-            uniqueItems: true,
-            items: itemSchema,
-        });
-    });
+    const items = objectValue(value, 'items');
+    if (typeof items === 'object' && items !== null) {
+        node.items = compatibleSchemaNode(items);
+    }
 
-    return normalized;
+    if (node.type === 'object') {
+        node.additionalProperties = false;
+    }
+
+    return node;
+}
+
+function compatibleLocalSchema(
+    schema: AIProviderJsonSchema,
+): Record<string, unknown> {
+    return compatibleSchemaNode(normalizedOpenAiSchema(schema));
 }
 
 function openAiResponseContent(body: string): string {
@@ -549,10 +551,7 @@ function localProviderBody(
             json_schema: {
                 name: 'soxl_grounded_explanation_v1',
                 strict: true,
-                schema: strictLocalSchema(
-                    request.responseFormat.schema,
-                    request.allowedEvidenceRefs ?? [],
-                ),
+                schema: compatibleLocalSchema(request.responseFormat.schema),
             },
         };
     } else if (request.responseMimeType === 'application/json') {
@@ -585,6 +584,31 @@ function providerHttpCategory(status: number): AIProviderFailureCategory {
     }
 
     return 'unknown_provider_error';
+}
+
+function sanitizedHttpRejectionReason(body: string): string {
+    let message = '';
+    try {
+        const parsed = JSON.parse(body) as unknown;
+        const error = objectValue(parsed, 'error');
+        message = typeof objectValue(error, 'message') === 'string'
+            ? String(objectValue(error, 'message')).toLowerCase()
+            : '';
+    } catch {
+        return 'non_json_error';
+    }
+
+    if (/context|token|prompt.{0,20}(?:long|length|limit)|length.{0,20}(?:prompt|context)/u.test(message)) {
+        return 'context_limit';
+    }
+    if (/json.?schema|schema|grammar/u.test(message)) {
+        return 'schema_rejected';
+    }
+    if (/parameter|argument|field/u.test(message)) {
+        return 'unsupported_request_field';
+    }
+
+    return 'provider_rejected_request';
 }
 
 function providerCall(
@@ -625,6 +649,11 @@ function providerCall(
         }
 
         if (response.status < 200 || response.status >= 300) {
+            if (response.status === 400) {
+                console.warn(
+                    `SOXL_AI_PROVIDER_HTTP_REJECTED provider=${config.providerId} reason=${sanitizedHttpRejectionReason(response.body)}`,
+                );
+            }
             throw new AIProviderError(
                 'provider_http_error',
                 config.providerId,

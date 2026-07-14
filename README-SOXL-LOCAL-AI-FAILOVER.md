@@ -8,7 +8,7 @@ This kit adds a SOXL-specific OpenAI-compatible router:
 4. Keep the primary circuit open for 60 seconds after a failure, avoiding a repeated 3-second delay on every request.
 5. Retry with Fin-R1 when the primary request fails or its output fails the existing production SOXL validator.
 6. Use native Node HTTP/HTTPS transport, avoiding Undici's approximately 300-second headers timeout.
-7. Send strict JSON Schema with the request-scoped evidence aliases.
+7. Send a strict provider-compatible JSON Schema that enforces the response shape and basic field types.
 8. Send `chat_template_kwargs.enable_thinking=false` only to Ornith; Fin-R1 receives the same strict schema without that Ornith-specific option.
 
 The 3-second limit applies only to the primary readiness check. It does not abort a valid analysis that takes longer than three seconds.
@@ -121,6 +121,7 @@ SOXL_AI_ROUTE provider=fin-r1-fallback role=fallback fallbackUsed=true reason=pr
 ```
 
 The implementation does not log raw prompts, model output, API keys, or HTTP response bodies.
+The provider schema intentionally omits dynamic alias enums and semantic constraints. The server-side SOXL validator remains the authority for exact keys, evidence aliases, missing-evidence coverage, numeric grounding, and all trading-safety rules.
 
 ## Deployment flow
 

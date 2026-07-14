@@ -113,14 +113,14 @@ describe('SOXL local provider router', () => {
             properties?: Record<string, {
                 items?: {
                     properties?: Record<string, {
-                        items?: { enum?: readonly string[] };
+                        items?: Record<string, unknown>;
                     }>;
                 };
             }>;
         };
-        expect(
-            schema.properties?.summary.items?.properties?.evidenceRefs.items?.enum,
-        ).toEqual(['E001', 'E002']);
+        expect(schema.properties?.summary.items?.properties?.evidenceRefs.items)
+            .toEqual({ type: 'string' });
+        expect(JSON.stringify(schema)).not.toMatch(/enum|minItems|maxItems|uniqueItems/u);
     });
 
     it('does not send Ornith-specific thinking controls to Fin-R1', async () => {
@@ -159,6 +159,7 @@ describe('SOXL local provider router', () => {
                 strict: true,
             },
         });
+        expect(JSON.stringify(body.response_format)).not.toMatch(/enum|minItems|maxItems|uniqueItems/u);
     });
 
     it.each([
@@ -231,6 +232,37 @@ describe('SOXL local provider router', () => {
             userInstruction: 'user',
             responseMimeType: 'application/json',
         })).rejects.toMatchObject(expected);
+    });
+
+    it('logs only a whitelisted reason for a provider HTTP rejection', async () => {
+        configureLocalRouting();
+        const request = vi.fn<SoxlAiHttpRequest>(async (input) => (
+            input.method === 'GET'
+                ? { status: 200, body: JSON.stringify({ data: [{ id: 'ornith-35b' }] }) }
+                : {
+                    status: 400,
+                    body: JSON.stringify({
+                        error: { message: 'Prompt exceeds the configured context token limit.' },
+                    }),
+                }
+        ));
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const resolveRoute = createSoxlAiLocalProviderRouteResolver({ request });
+        const route = await resolveRoute();
+
+        await expect(route.attempts[1].call({
+            systemInstruction: 'system',
+            userInstruction: 'synthetic diagnostic only',
+            responseMimeType: 'application/json',
+        })).rejects.toMatchObject({
+            code: 'provider_http_error',
+            category: 'structured_output_rejected',
+            httpStatus: 400,
+        });
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_PROVIDER_HTTP_REJECTED provider=fin-fallback reason=context_limit',
+        );
+        expect(warnSpy.mock.calls.flat().join(' ')).not.toContain('Prompt exceeds');
     });
 
     it('falls back after a three-second health timeout and skips repeated probes while the circuit is open', async () => {
