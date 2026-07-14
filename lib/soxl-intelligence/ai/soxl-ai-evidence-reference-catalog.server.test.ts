@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SoxlAiEvidenceItem, SoxlAiEvidencePackage } from './soxl-ai-evidence';
 import {
     buildSoxlAiEvidenceReferenceCatalog,
+    buildSoxlAiFormatterEvidencePackage,
     buildSoxlAiModelEvidencePackage,
     SOXL_AI_EVIDENCE_ALIAS_PATTERN,
     SOXL_AI_MAX_EVIDENCE_CATALOG_SIZE,
@@ -109,6 +110,36 @@ describe('SOXL AI evidence reference catalog', () => {
         expect(serialized).not.toContain('snapshotIdentities');
         expect(serialized).not.toContain('plan.assumptions.excluded');
         expect(serialized).not.toContain('monitor.calculations.excluded');
+    });
+
+    it('builds a compact formatter package without competing assessment definitions', () => {
+        const input = evidence(['canonical.current']);
+        const assessmentId = 'current.assessment.upward_alignment.total_count';
+        const withAssessment: SoxlAiEvidencePackage = {
+            ...input,
+            items: [
+                { ...input.items[0], value: 'above' },
+                {
+                    ...item(assessmentId),
+                    source: 'market_assessment',
+                    trustClass: 'deterministic_assessment',
+                    value: 9,
+                },
+                ...input.items.slice(1),
+            ],
+            groups: {
+                ...input.groups,
+                currentAssessment: [assessmentId],
+            },
+        };
+        const catalog = catalogFor(withAssessment);
+        const formatter = buildSoxlAiFormatterEvidencePackage(withAssessment, catalog);
+        const serialized = JSON.stringify(formatter);
+
+        expect(formatter.selectedOutcome).toBe('current_evidence_state');
+        expect(formatter.items.map(({ ref }) => ref)).toEqual(['E001']);
+        expect(serialized).not.toContain('upward_alignment');
+        expect(serialized).not.toContain(assessmentId);
     });
 
     it('fails instead of truncating when the catalog ceiling is exceeded', () => {

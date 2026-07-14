@@ -44,6 +44,17 @@ export interface SoxlAiModelEvidencePackage {
     };
 }
 
+export interface SoxlAiFormatterEvidencePackage {
+    readonly status: SoxlAiEvidencePackage['status'];
+    readonly selectedOutcome: 'current_evidence_state';
+    readonly issues: readonly SoxlAiEvidenceIssue[];
+    readonly items: readonly SoxlAiModelEvidenceItem[];
+    readonly groups: {
+        readonly currentMarketFacts: readonly string[];
+        readonly missingEvidence: readonly string[];
+    };
+}
+
 function aliasForIndex(index: number): string {
     return `E${String(index + 1).padStart(3, '0')}`;
 }
@@ -127,6 +138,56 @@ export function buildSoxlAiModelEvidencePackage(
         groups: {
             currentMarketFacts: aliasesForIds(evidence.groups.currentMarketFacts, catalog),
             currentAssessment: aliasesForIds(evidence.groups.currentAssessment, catalog),
+            missingEvidence: aliasesForIds(evidence.groups.missingEvidence, catalog),
+        },
+    };
+}
+
+function formatterEvidenceIds(
+    evidence: SoxlAiEvidencePackage,
+): ReadonlySet<string> {
+    const itemsById = new Map(evidence.items.map((item) => [item.id, item]));
+    const selected = evidence.groups.currentMarketFacts.filter((id) => {
+        const item = itemsById.get(id);
+        return item !== undefined && (
+            item.availability !== 'available'
+            || typeof item.value === 'string'
+        );
+    });
+
+    if (selected.length === 0 && evidence.groups.currentMarketFacts[0] !== undefined) {
+        selected.push(evidence.groups.currentMarketFacts[0]);
+    }
+
+    return new Set([
+        ...selected,
+        // The formatter must retain every missing item so the unchanged
+        // application validator can require exact missing-evidence coverage.
+        ...evidence.groups.missingEvidence,
+    ]);
+}
+
+export function buildSoxlAiFormatterEvidencePackage(
+    evidence: SoxlAiEvidencePackage,
+    catalog: SoxlAiEvidenceReferenceCatalog,
+): SoxlAiFormatterEvidencePackage {
+    const selectedIds = formatterEvidenceIds(evidence);
+    const full = buildSoxlAiModelEvidencePackage(evidence, catalog);
+    const items = full.items.filter(({ ref }) => {
+        const canonicalId = catalog.aliasToEvidenceId.get(ref);
+        return canonicalId !== undefined && selectedIds.has(canonicalId);
+    });
+
+    return {
+        status: full.status,
+        selectedOutcome: 'current_evidence_state',
+        issues: full.issues,
+        items,
+        groups: {
+            currentMarketFacts: aliasesForIds(
+                evidence.groups.currentMarketFacts.filter((id) => selectedIds.has(id)),
+                catalog,
+            ),
             missingEvidence: aliasesForIds(evidence.groups.missingEvidence, catalog),
         },
     };

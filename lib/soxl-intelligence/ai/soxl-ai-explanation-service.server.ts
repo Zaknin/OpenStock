@@ -9,6 +9,7 @@ import type {
 } from './soxl-ai-evidence';
 import {
     buildSoxlAiEvidenceReferenceCatalog,
+    buildSoxlAiFormatterEvidencePackage,
 } from './soxl-ai-evidence-reference-catalog.server';
 import {
     fallbackReasonForPrimaryError,
@@ -265,6 +266,11 @@ function providerRequest(
         userInstruction: prompt.userInstruction,
         responseMimeType: 'application/json',
         timeoutMs: SOXL_AI_PROVIDER_TIMEOUT_MS,
+        requestMetadata: {
+            systemInstructionChars: prompt.systemInstruction.length,
+            userInstructionChars: prompt.userInstruction.length,
+            evidenceItemCount: 0,
+        },
     };
 
     if (!strictStructuredOutput) {
@@ -300,6 +306,10 @@ export async function generateSoxlAiExplanation(
     }
 
     const prompt = buildSoxlAiPrompt(input.evidence, catalogResult.catalog);
+    const evidenceItemCount = buildSoxlAiFormatterEvidencePackage(
+        input.evidence,
+        catalogResult.catalog,
+    ).items.length;
     const aliases = catalogResult.catalog.entries.map(({ alias }) => alias);
     let plan: ProviderAttemptPlan;
     try {
@@ -326,13 +336,21 @@ export async function generateSoxlAiExplanation(
             aliases,
             attempt.strictStructuredOutput,
         );
+        const requestWithMetadata: SoxlAiLocalProviderRequest = {
+            ...request,
+            requestMetadata: {
+                systemInstructionChars: prompt.systemInstruction.length,
+                userInstructionChars: prompt.userInstruction.length,
+                evidenceItemCount,
+            },
+        };
         let providerResult: SoxlAiProviderCallResult | {
             readonly providerId: null;
             readonly text: string;
         };
 
         try {
-            providerResult = normalizeProviderResult(await attempt.call(request));
+            providerResult = normalizeProviderResult(await attempt.call(requestWithMetadata));
         } catch (error) {
             logProviderFailure(error);
             addIssue(issues, providerIssue(error));

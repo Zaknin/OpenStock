@@ -10,6 +10,7 @@ This kit adds a SOXL-specific OpenAI-compatible router:
 6. Use native Node HTTP/HTTPS transport, avoiding Undici's approximately 300-second headers timeout.
 7. Send a strict provider-compatible JSON Schema that enforces the response shape and basic field types.
 8. Send `chat_template_kwargs.enable_thinking=false` only to Ornith; Fin-R1 receives the same strict schema without that Ornith-specific option.
+9. Build a compact formatter payload from deterministic current-state facts and only required missing-evidence markers. The full evidence catalog stays server-side for canonical mapping, exact missing-evidence coverage, grounding, and response-contract validation.
 
 The 3-second limit applies only to the primary readiness check. It does not abort a valid analysis that takes longer than three seconds.
 
@@ -65,6 +66,8 @@ SOXL_AI_FALLBACK_REQUEST_TIMEOUT_MS=1200000
 
 SOXL_AI_PRIMARY_CIRCUIT_OPEN_MS=60000
 SOXL_AI_MAX_TOKENS=2048
+SOXL_AI_FALLBACK_MAX_TOKENS=1024
+SOXL_AI_FALLBACK_MAX_REQUEST_BYTES=96000
 SOXL_AI_CACHE_PROMPT=false
 ```
 
@@ -120,8 +123,8 @@ SOXL_AI_RESPONSE_REJECTED provider=ornith-35b-primary reason=<fixed-validator-re
 SOXL_AI_ROUTE provider=fin-r1-fallback role=fallback fallbackUsed=true reason=primary_validation_rejected
 ```
 
-The implementation does not log raw prompts, model output, API keys, or HTTP response bodies.
-The provider schema intentionally omits dynamic alias enums and semantic constraints. The server-side SOXL validator remains the authority for exact keys, evidence aliases, missing-evidence coverage, numeric grounding, and all trading-safety rules.
+The implementation does not log raw prompts, model output, API keys, provider URLs, or HTTP response bodies. It records only request-size metadata (prompt and schema character counts, evidence count, token cap, and HTTP body bytes) and validator reason/section/field metadata. Fin-R1 advertises a 32768-token default context through `/props`; the fallback keeps a 1024-token output cap and rejects requests over the explicit 96000-byte local budget before sending them.
+The provider schema intentionally omits dynamic alias enums and semantic constraints. The formatter payload omits competing assessment definitions; it supplies the application-selected current evidence-state outcome only. The server-side SOXL validator remains the authority for exact keys, evidence aliases, missing-evidence coverage, numeric grounding, and all trading-safety rules, including rejection of forbidden scenario selection.
 
 ## Deployment flow
 

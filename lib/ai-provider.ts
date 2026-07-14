@@ -72,6 +72,7 @@ export type AIProviderErrorCode =
   | 'provider_not_configured'
   | 'provider_timeout'
   | 'provider_http_error'
+  | 'provider_request_too_large'
   | 'provider_invalid_response'
   | 'all_providers_failed';
 
@@ -85,6 +86,7 @@ export type AIProviderFailureCategory =
   | 'provider_timeout'
   | 'provider_unavailable'
   | 'structured_schema_invalid'
+  | 'provider_request_too_large'
   | 'dns_failure'
   | 'tls_failure'
   | 'connection_refused'
@@ -133,6 +135,8 @@ function providerErrorMessage(code: AIProviderErrorCode): string {
       return 'AI provider request timed out.';
     case 'provider_http_error':
       return 'AI provider request failed.';
+    case 'provider_request_too_large':
+      return 'AI provider request exceeds the configured local size limit.';
     case 'provider_invalid_response':
       return 'AI provider returned an invalid response.';
     case 'all_providers_failed':
@@ -147,6 +151,10 @@ function defaultFailureCategory(code: AIProviderErrorCode): AIProviderFailureCat
 
   if (code === 'provider_invalid_response') {
     return 'invalid_provider_response';
+  }
+
+  if (code === 'provider_request_too_large') {
+    return 'provider_request_too_large';
   }
 
   return 'unknown_provider_error';

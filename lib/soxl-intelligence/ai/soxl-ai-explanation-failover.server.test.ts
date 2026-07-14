@@ -156,6 +156,41 @@ describe('SOXL AI provider failover', () => {
         expect(fallbackCall).toHaveBeenCalledTimes(1);
     });
 
+    it('retries with Fin-R1 when Ornith selects a forbidden scenario', async () => {
+        const invalidPrimary = {
+            ...JSON.parse(validResponse()) as Record<string, unknown>,
+            summary: [{
+                text: 'The preferred scenario is upward.',
+                evidenceRefs: ['E001'],
+            }],
+        };
+        const primaryCall = vi.fn<SoxlAiProviderCandidate['call']>()
+            .mockResolvedValue({ providerId: 'ornith-primary', text: JSON.stringify(invalidPrimary) });
+        const fallbackCall = vi.fn<SoxlAiProviderCandidate['call']>()
+            .mockResolvedValue({ providerId: 'fin-r1-fallback', text: validResponse() });
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            resolveProviderRoute: routeResolver({
+                attempts: [
+                    candidate('primary', 'ornith-primary', primaryCall),
+                    candidate('fallback', 'fin-r1-fallback', fallbackCall),
+                ],
+                initialFallbackReason: null,
+            }),
+        });
+
+        expect(result).toMatchObject({
+            status: 'available',
+            providerId: 'fin-r1-fallback',
+            fallbackUsed: true,
+            fallbackReason: 'primary_validation_rejected',
+        });
+        expect(primaryCall).toHaveBeenCalledTimes(1);
+        expect(fallbackCall).toHaveBeenCalledTimes(1);
+    });
+
     it('retries with Fin-R1 when Ornith returns a JSON contract mismatch', async () => {
         const primaryCall = vi.fn<SoxlAiProviderCandidate['call']>()
             .mockResolvedValue({

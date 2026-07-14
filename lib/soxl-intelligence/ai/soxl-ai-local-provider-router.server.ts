@@ -26,6 +26,11 @@ export type SoxlAiPrimaryFallbackReason =
 
 export interface SoxlAiLocalProviderRequest extends AIProviderStructuredRequest {
     readonly allowedEvidenceRefs?: readonly string[];
+    readonly requestMetadata?: {
+        readonly systemInstructionChars: number;
+        readonly userInstructionChars: number;
+        readonly evidenceItemCount: number;
+    };
 }
 
 export interface SoxlAiRoutedProviderResult {
@@ -60,6 +65,7 @@ interface SoxlAiLocalProviderConfig {
     readonly healthTimeoutMs: number;
     readonly requestTimeoutMs: number;
     readonly maxTokens: number;
+    readonly maxRequestBytes: number | null;
     readonly cachePrompt: boolean;
 }
 
@@ -102,6 +108,8 @@ const defaultPrimaryRequestTimeoutMs = 600_000;
 const defaultFallbackRequestTimeoutMs = 1_200_000;
 const defaultPrimaryCircuitOpenMs = 60_000;
 const defaultMaxTokens = 2_048;
+const defaultFallbackMaxTokens = 1_024;
+const defaultFallbackMaxRequestBytes = 96_000;
 
 const primaryCircuit: PrimaryCircuitState = {
     openUntilMs: 0,
@@ -188,7 +196,12 @@ function providerConfig(
                 ? defaultPrimaryRequestTimeoutMs
                 : defaultFallbackRequestTimeoutMs,
         ),
-        maxTokens: envPositiveInteger('SOXL_AI_MAX_TOKENS', defaultMaxTokens),
+        maxTokens: role === 'fallback'
+            ? envPositiveInteger('SOXL_AI_FALLBACK_MAX_TOKENS', defaultFallbackMaxTokens)
+            : envPositiveInteger('SOXL_AI_MAX_TOKENS', defaultMaxTokens),
+        maxRequestBytes: role === 'fallback'
+            ? envPositiveInteger('SOXL_AI_FALLBACK_MAX_REQUEST_BYTES', defaultFallbackMaxRequestBytes)
+            : null,
         cachePrompt: envBoolean('SOXL_AI_CACHE_PROMPT', false),
     };
 }
@@ -616,12 +629,27 @@ function providerCall(
     request: SoxlAiHttpRequest,
 ): SoxlAiProviderCandidate['call'] {
     return async (providerRequest) => {
-        const requestBody = JSON.stringify(
-            localProviderBody(providerRequest, config),
+        const body = localProviderBody(providerRequest, config);
+        const requestBody = JSON.stringify(body);
+        const requestBytes = Buffer.byteLength(requestBody);
+        const schema = body.response_format === undefined
+            ? ''
+            : JSON.stringify((body.response_format as { readonly json_schema?: unknown }).json_schema ?? '');
+        const metadata = providerRequest.requestMetadata;
+        console.info(
+            `SOXL_AI_PROVIDER_REQUEST provider=${config.providerId} systemChars=${metadata?.systemInstructionChars ?? providerRequest.systemInstruction.length} userChars=${metadata?.userInstructionChars ?? providerRequest.userInstruction.length} schemaChars=${schema.length} evidenceItems=${metadata?.evidenceItemCount ?? 0} maxTokens=${config.maxTokens} bodyBytes=${requestBytes}`,
         );
+
+        if (config.maxRequestBytes !== null && requestBytes > config.maxRequestBytes) {
+            throw new AIProviderError(
+                'provider_request_too_large',
+                config.providerId,
+                { category: 'provider_request_too_large' },
+            );
+        }
         const headers: Record<string, string> = {
             'content-type': 'application/json',
-            'content-length': String(Buffer.byteLength(requestBody)),
+            'content-length': String(requestBytes),
             connection: 'close',
         };
         if (config.apiKey.trim().length > 0) {

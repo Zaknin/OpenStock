@@ -671,6 +671,20 @@ describe('validateSoxlAiModelExplanation', () => {
         }), 'forbidden_scenario_selection', input);
     });
 
+    it('reports the exact response section for a forbidden scenario selection', () => {
+        const input = evidence();
+        const catalog = catalogFor(input);
+
+        expect(validate(response(catalog, {
+            supportingEvidence: [point('The preferred scenario is upward.', [availableId], catalog)],
+        }), input)).toMatchObject({
+            valid: false,
+            reason: 'forbidden_scenario_selection',
+            section: 'supportingEvidence',
+            field: 'text',
+        });
+    });
+
     it.each([
         'guaranteed outcome',
         'probability percentage is not available',

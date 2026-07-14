@@ -339,6 +339,20 @@ describe('generateSoxlAiExplanation', () => {
         expect(diagnostic).not.toContain(availableId);
     });
 
+    it('logs the section and field for forbidden scenario selection without model text', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await generateSoxlAiExplanation({ evidence: evidence() }, {
+            callProvider: providerReturning(JSON.stringify(explanation({
+                limitations: [modelPoint('The preferred scenario is upward.')],
+            }))),
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=forbidden_scenario_selection section=limitations field=text',
+        );
+        expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('preferred scenario');
+    });
+
     it('uses the precise section limit diagnostic instead of other_shape_mismatch', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         await generateSoxlAiExplanation({ evidence: evidence() }, {

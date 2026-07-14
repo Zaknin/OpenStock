@@ -172,13 +172,15 @@ describe('buildSoxlAiPrompt', () => {
 
         expect(instruction).toContain('Never recalculate deterministic arithmetic');
         expect(instruction).toContain('Do not treat completed-candle data as a live quote');
-        expect(instruction).toContain('without selecting a preferred scenario');
+        expect(instruction).toContain('application has already selected the current evidence-state outcome');
+        expect(instruction).toContain('Do not choose, rank, compare, score, recommend, or discuss alternatives');
         expect(instruction).toContain('Do not claim that condition counts prove an outcome');
         expect(instruction).toContain('fabricated prices');
         expect(instruction).toContain('confidence percentage');
         expect(instruction).toContain('buy, sell, hold, add, reduce, close, exit now');
         expect(instruction).toContain('Summary text must remain qualitative');
         expect(instruction).toContain('Do not include numerals, percentages, prices, dates, basis points, indicator values');
+        expect(instruction).not.toMatch(/scenario/iu);
     });
 
     it('keeps the exact structured response keys without a catch-all prose field', () => {

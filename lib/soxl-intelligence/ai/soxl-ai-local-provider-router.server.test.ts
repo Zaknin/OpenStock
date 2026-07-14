@@ -162,6 +162,40 @@ describe('SOXL local provider router', () => {
         expect(JSON.stringify(body.response_format)).not.toMatch(/enum|minItems|maxItems|uniqueItems/u);
     });
 
+    it('logs only request-size metadata and rejects an oversized fallback request before transport', async () => {
+        configureLocalRouting();
+        vi.stubEnv('SOXL_AI_FALLBACK_MAX_REQUEST_BYTES', '200');
+        const request = vi.fn<SoxlAiHttpRequest>(async (input) => ({
+            status: 200,
+            body: input.method === 'GET'
+                ? JSON.stringify({ data: [{ id: 'ornith-35b' }] })
+                : JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{}' } }] }),
+        }));
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+        const route = await createSoxlAiLocalProviderRouteResolver({ request })();
+
+        await expect(route.attempts[1].call({
+            systemInstruction: 'system-secret',
+            userInstruction: 'user-secret'.repeat(100),
+            responseMimeType: 'application/json',
+            responseFormat: buildSoxlAiModelExplanationResponseFormat(),
+            requestMetadata: {
+                systemInstructionChars: 13,
+                userInstructionChars: 1_100,
+                evidenceItemCount: 37,
+            },
+        })).rejects.toMatchObject({
+            code: 'provider_request_too_large',
+            category: 'provider_request_too_large',
+            providerId: 'fin-fallback',
+        });
+        expect(request.mock.calls.filter(([input]) => input.method === 'POST')).toHaveLength(0);
+        expect(infoSpy).toHaveBeenCalledWith(expect.stringMatching(
+            /^SOXL_AI_PROVIDER_REQUEST provider=fin-fallback systemChars=13 userChars=1100 schemaChars=\d+ evidenceItems=37 maxTokens=1024 bodyBytes=\d+$/u,
+        ));
+        expect(JSON.stringify(infoSpy.mock.calls)).not.toContain('secret');
+    });
+
     it.each([
         ['a blank assistant response', {
             choices: [{ finish_reason: 'stop', message: { content: '  ' } }],

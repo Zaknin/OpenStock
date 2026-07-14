@@ -3,6 +3,17 @@ import {
     buildSoxlAiEvidencePackage,
     type SoxlAiEvidenceItem,
 } from './soxl-ai-evidence';
+import {
+    buildSoxlAiEvidenceReferenceCatalog,
+    buildSoxlAiFormatterEvidencePackage,
+    buildSoxlAiModelEvidencePackage,
+} from './soxl-ai-evidence-reference-catalog.server';
+import { buildSoxlAiModelExplanationResponseFormat, buildSoxlAiPrompt } from './soxl-ai-prompt';
+import { validateSoxlAiModelExplanation } from './soxl-ai-response-validator';
+import {
+    createSoxlAiLocalProviderRouteResolver,
+    type SoxlAiHttpRequest,
+} from './soxl-ai-local-provider-router.server';
 import type {
     SoxlAssessmentSection,
     SoxlConditionAssessment,
@@ -461,6 +472,83 @@ function allKeys(value: unknown): readonly string[] {
 }
 
 describe('buildSoxlAiEvidencePackage', () => {
+    it('keeps a production-shaped formatter request compact and validator-safe', async () => {
+        const result = buildSoxlAiEvidencePackage({
+            facts: facts(),
+            assessment: assessment(),
+            plan: null,
+            monitor: null,
+        });
+        const catalogResult = buildSoxlAiEvidenceReferenceCatalog(result);
+        if (!catalogResult.ok) {
+            throw new Error(catalogResult.issue);
+        }
+        const catalog = catalogResult.catalog;
+        const prompt = buildSoxlAiPrompt(result, catalog);
+        const formatterEvidence = buildSoxlAiFormatterEvidencePackage(result, catalog);
+        const fullEvidence = buildSoxlAiModelEvidencePackage(result, catalog);
+        const firstRef = formatterEvidence.items[0]?.ref;
+        if (firstRef === undefined) {
+            throw new Error('Expected compact formatter evidence');
+        }
+        const modelResponse = JSON.stringify({
+            status: 'available',
+            summary: [{
+                text: 'The supplied current evidence state is available.',
+                evidenceRefs: [firstRef],
+            }],
+            supportingEvidence: [],
+            conflictingEvidence: [],
+            missingEvidence: [],
+            riskReminders: [],
+            limitations: [],
+        });
+        let requestBody = '';
+        const request: SoxlAiHttpRequest = async (input) => {
+            requestBody = input.body ?? '';
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    choices: [{ finish_reason: 'stop', message: { content: modelResponse } }],
+                }),
+            };
+        };
+        vi.stubEnv('SOXL_AI_FALLBACK_MAX_REQUEST_BYTES', '96000');
+        vi.stubEnv('SOXL_AI_FALLBACK_MAX_TOKENS', '1024');
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+        const route = await createSoxlAiLocalProviderRouteResolver({ request })();
+        const response = await route.attempts[0].call({
+            systemInstruction: prompt.systemInstruction,
+            userInstruction: prompt.userInstruction,
+            responseMimeType: 'application/json',
+            responseFormat: buildSoxlAiModelExplanationResponseFormat(),
+            requestMetadata: {
+                systemInstructionChars: prompt.systemInstruction.length,
+                userInstructionChars: prompt.userInstruction.length,
+                evidenceItemCount: formatterEvidence.items.length,
+            },
+        });
+        const compactSerializedEvidence = JSON.stringify(formatterEvidence, null, 2);
+        const fullUserInstruction = prompt.userInstruction.replace(
+            compactSerializedEvidence,
+            JSON.stringify(fullEvidence, null, 2),
+        );
+        const fullRequest = JSON.parse(requestBody) as { messages: { content: string }[] };
+        fullRequest.messages[1].content = fullUserInstruction;
+
+        expect(response.text).toBe(modelResponse);
+        expect(validateSoxlAiModelExplanation(modelResponse, result, catalog)).toMatchObject({ valid: true });
+        expect(prompt.systemInstruction).not.toMatch(/scenario/iu);
+        expect(prompt.userInstruction).not.toMatch(/upward_alignment|downward_alignment|preferred scenario/iu);
+        expect(formatterEvidence.items.length).toBeLessThan(fullEvidence.items.length);
+        expect(Buffer.byteLength(requestBody)).toBeLessThanOrEqual(96_000);
+        expect(Buffer.byteLength(JSON.stringify(fullRequest))).toBeGreaterThan(Buffer.byteLength(requestBody));
+        expect(JSON.parse(requestBody)).toMatchObject({ max_tokens: 1_024 });
+        expect(JSON.stringify(infoSpy.mock.calls)).not.toMatch(/twelve-data|upward_alignment|current\.market_facts/u);
+        vi.unstubAllEnvs();
+        infoSpy.mockRestore();
+    });
+
     it('builds available current evidence with stable IDs, exact source paths, raw precision, and ordered groups', () => {
         const result = buildSoxlAiEvidencePackage({
             facts: facts(),

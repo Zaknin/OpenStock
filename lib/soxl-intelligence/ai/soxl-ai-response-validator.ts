@@ -509,17 +509,33 @@ function validateProhibitedContent(
     response: SoxlAiValidatedExplanation,
     context: ValidationContext,
 ): void {
-    const allPoints = allResponsePoints(response);
+    const allPoints = responsePointsWithSections(response);
 
-    if (allPoints.some((point) => recommendationPatterns.some((pattern) => pattern.test(point.text)))) {
-        addIssue(context, 'forbidden_recommendation');
+    const recommendation = allPoints.find(({ point }) => recommendationPatterns.some((pattern) => pattern.test(point.text)));
+    if (recommendation !== undefined) {
+        addIssue(context, 'forbidden_recommendation', 'text', recommendation.section);
     }
-    if (allPoints.some((point) => scenarioSelectionPatterns.some((pattern) => pattern.test(point.text)))) {
-        addIssue(context, 'forbidden_scenario_selection');
+    const scenarioSelection = allPoints.find(({ point }) => scenarioSelectionPatterns.some((pattern) => pattern.test(point.text)));
+    if (scenarioSelection !== undefined) {
+        addIssue(context, 'forbidden_scenario_selection', 'text', scenarioSelection.section);
     }
-    if (allPoints.some((point) => prohibitedPatterns.some((pattern) => pattern.test(point.text)))) {
-        addIssue(context, 'prohibited_content');
+    const prohibited = allPoints.find(({ point }) => prohibitedPatterns.some((pattern) => pattern.test(point.text)));
+    if (prohibited !== undefined) {
+        addIssue(context, 'prohibited_content', 'text', prohibited.section);
     }
+}
+
+function responsePointsWithSections(
+    response: SoxlAiValidatedExplanation,
+): readonly { readonly section: SoxlAiResponseValidationSection; readonly point: SoxlAiExplanationPoint }[] {
+    return [
+        ...response.summary.map((point) => ({ section: 'summary' as const, point })),
+        ...response.supportingEvidence.map((point) => ({ section: 'supportingEvidence' as const, point })),
+        ...response.conflictingEvidence.map((point) => ({ section: 'conflictingEvidence' as const, point })),
+        ...response.missingEvidence.map((point) => ({ section: 'missingEvidence' as const, point })),
+        ...response.riskReminders.map((point) => ({ section: 'riskReminders' as const, point })),
+        ...response.limitations.map((point) => ({ section: 'limitations' as const, point })),
+    ];
 }
 
 function allResponsePoints(
