@@ -1,0 +1,53 @@
+{
+  "schema": "portfolio-core-synthetic-fixture-design-v1",
+  "synthetic": true,
+  "privacy_note": "All names, symbols, dates, quantities, and amounts in this file are invented test data and must not be replaced with workbook values.",
+  "portfolio": {
+    "id": "portfolio_northstar",
+    "base_currency": "USD"
+  },
+  "accounts": [
+    { "id": "acct_orbit", "name": "Orbit Ledger" },
+    { "id": "acct_harbor", "name": "Harbor Ledger" }
+  ],
+  "instruments": [
+    { "id": "instrument_alfa", "symbol": "ALFA", "currency": "USD", "quote_in_cents": false },
+    { "id": "instrument_penny", "symbol": "PENNYQ", "currency": "CAD", "quote_in_cents": true },
+    { "id": "instrument_child", "symbol": "NOVAQ", "currency": "USD", "quote_in_cents": false }
+  ],
+  "transactions": [
+    { "id": "tx_001", "date": "2032-01-03", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Buy", "quantity": "10.125", "unit_amount": "20.00", "gross_amount": "202.50", "fee": "1.25", "split_ratio": null },
+    { "id": "tx_002", "date": "2032-01-03", "sequence": 2, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Buy", "quantity": "0.000000004", "unit_amount": "20.00", "gross_amount": "0.00000008", "fee": "0.00", "split_ratio": null },
+    { "id": "tx_003", "date": "2032-02-01", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Dividend", "quantity": "0", "unit_amount": "0", "gross_amount": "3.21", "fee": "0", "split_ratio": null },
+    { "id": "tx_004", "date": "2032-02-14", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Sell", "quantity": "2.125", "unit_amount": "24.00", "gross_amount": "51.00", "fee": "0.50", "split_ratio": null },
+    { "id": "tx_005", "date": "2032-03-01", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Return of capital", "quantity": "0", "unit_amount": "0", "gross_amount": "1.00", "fee": "0", "split_ratio": null },
+    { "id": "tx_006", "date": "2032-03-02", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Reinvested capital gain distribution", "quantity": "0", "unit_amount": "0", "gross_amount": "0.75", "fee": "0", "split_ratio": null },
+    { "id": "tx_007", "date": "2032-03-03", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Cost Base Adj.", "quantity": "0", "unit_amount": "0", "gross_amount": "-0.25", "fee": "0", "split_ratio": null },
+    { "id": "tx_008", "date": "2032-04-01", "sequence": 1, "account_id": "acct_orbit", "instrument_id": "instrument_alfa", "type": "Split", "quantity": "0", "unit_amount": "0", "gross_amount": "0", "fee": "0", "split_ratio": "2" },
+    { "id": "tx_009", "date": "2032-04-02", "sequence": 1, "account_id": "acct_harbor", "instrument_id": "instrument_penny", "type": "Buy", "quantity": "7.5", "unit_amount": "345.0", "gross_amount": "2587.5", "fee": "2.00", "split_ratio": null }
+  ],
+  "manual_overrides": [
+    { "instrument_id": "instrument_penny", "surface": "current_market_value", "effective_date": "2032-04-30", "value": "300.00", "currency": "CAD" }
+  ],
+  "corporate_actions": [
+    { "id": "ca_001", "type": "spin_off", "date": "2032-05-01", "parent_instrument_id": "instrument_alfa", "child_instrument_id": "instrument_child", "share_ratio": "0.25", "cost_base_ratio": "0.10" }
+  ],
+  "expected_state_categories": [
+    "same_date_sequence_matters",
+    "fractional_quantity",
+    "residual_quantity_below_1e-8",
+    "fee_included_in_acb_for_buy",
+    "quote_in_cents",
+    "manual_price_override",
+    "missing_provider_price",
+    "missing_dividend_estimate",
+    "multiple_accounts",
+    "multiple_currencies",
+    "split",
+    "spin_off"
+  ],
+  "non_goals": [
+    "No calculation-engine expected values are supplied in Phase 0.",
+    "No workbook value, account, holding, or transaction is represented here."
+  ]
+}

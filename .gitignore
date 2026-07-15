@@ -23,6 +23,7 @@
 # misc
 .DS_Store
 *.pem
+/.local/portfolio-core-fixtures/
 
 # debug
 npm-debug.log*
