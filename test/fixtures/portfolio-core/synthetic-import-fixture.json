@@ -1,0 +1,55 @@
+{
+  "schema": "portfolio-core-synthetic-import-fixture-v1",
+  "synthetic": true,
+  "privacy_note": "Every value in this file is invented test data. It is not copied from the private workbook fixture pack.",
+  "manifest": { "workbook_sha256": "SYNTHETIC-PORTFOLIO-CORE-FIXTURE-0001", "extractor_version": "synthetic-fixture-v1" },
+  "setup": { "cells": [
+    { "source": { "sheet": "Setup", "row": 5, "column": "B", "cell": "B5", "sequence": null }, "original_value": "USD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 6, "column": "B", "cell": "B6", "sequence": null }, "original_value": "CAD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 12, "column": "B", "cell": "B12", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 39, "column": "B", "cell": "B39", "sequence": null }, "original_value": "Account Alpha", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 40, "column": "B", "cell": "B40", "sequence": null }, "original_value": "Account Beta", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 52, "column": "B", "cell": "B52", "sequence": null }, "original_value": "ORBIT", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 52, "column": "C", "cell": "C52", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 52, "column": "D", "cell": "D52", "sequence": null }, "original_value": "USD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 52, "column": "H", "cell": "H52", "sequence": null }, "original_value": "FALSE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 53, "column": "B", "cell": "B53", "sequence": null }, "original_value": "PENNYQ", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 53, "column": "C", "cell": "C53", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 53, "column": "D", "cell": "D53", "sequence": null }, "original_value": "CAD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 53, "column": "H", "cell": "H53", "sequence": null }, "original_value": "TRUE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 54, "column": "B", "cell": "B54", "sequence": null }, "original_value": "pennyq", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 54, "column": "C", "cell": "C54", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 54, "column": "D", "cell": "D54", "sequence": null }, "original_value": "CAD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 54, "column": "H", "cell": "H54", "sequence": null }, "original_value": "TRUE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 55, "column": "B", "cell": "B55", "sequence": null }, "original_value": "TWICE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 55, "column": "C", "cell": "C55", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 55, "column": "D", "cell": "D55", "sequence": null }, "original_value": "USD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 55, "column": "H", "cell": "H55", "sequence": null }, "original_value": "FALSE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 56, "column": "B", "cell": "B56", "sequence": null }, "original_value": "TWICE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 56, "column": "C", "cell": "C56", "sequence": null }, "original_value": "Core", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 56, "column": "D", "cell": "D56", "sequence": null }, "original_value": "USD", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+    { "source": { "sheet": "Setup", "row": 56, "column": "H", "cell": "H56", "sequence": null }, "original_value": "FALSE", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" }
+  ] },
+  "tradeLog": { "transactions": [
+    { "source": { "sheet": "Trade Log", "row": 6, "sequence": 1 }, "cells": [
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "B", "cell": "B6", "sequence": 1 }, "original_value": "48900", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "C", "cell": "C6", "sequence": 1 }, "original_value": "Buy", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "D", "cell": "D6", "sequence": 1 }, "original_value": "ORBIT", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "E", "cell": "E6", "sequence": 1 }, "original_value": "10", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "F", "cell": "F6", "sequence": 1 }, "original_value": "12.50", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "G", "cell": "G6", "sequence": 1 }, "original_value": null, "formula": "E6*F6", "cached_value": "125.00", "cell_type": "n", "calculation_class": "formula" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "H", "cell": "H6", "sequence": 1 }, "original_value": "1.00", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 6, "column": "I", "cell": "I6", "sequence": 1 }, "original_value": "Account Alpha", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" }
+    ] },
+    { "source": { "sheet": "Trade Log", "row": 7, "sequence": 2 }, "cells": [
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "B", "cell": "B7", "sequence": 2 }, "original_value": "48900", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "C", "cell": "C7", "sequence": 2 }, "original_value": "Sell", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "D", "cell": "D7", "sequence": 2 }, "original_value": "ORBIT", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "E", "cell": "E7", "sequence": 2 }, "original_value": "1.25", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "F", "cell": "F7", "sequence": 2 }, "original_value": "14", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "G", "cell": "G7", "sequence": 2 }, "original_value": "17.5", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "H", "cell": "H7", "sequence": 2 }, "original_value": "0.25", "formula": null, "cached_value": null, "cell_type": "n", "calculation_class": "input" },
+      { "source": { "sheet": "Trade Log", "row": 7, "column": "I", "cell": "I7", "sequence": 2 }, "original_value": "Account Beta", "formula": null, "cached_value": null, "cell_type": "s", "calculation_class": "input" }
+    ] }
+  ] }
+}

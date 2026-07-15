@@ -24,6 +24,7 @@
 .DS_Store
 *.pem
 /.local/portfolio-core-fixtures/
+/.local/portfolio-core-import-plans/
 
 # debug
 npm-debug.log*

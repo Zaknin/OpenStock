@@ -46,6 +46,16 @@
     "split",
     "spin_off"
   ],
+  "import_planner_validation_cases": [
+    "duplicate_setup_symbol_is_an_exception",
+    "case_only_possible_alias_requires_review",
+    "unknown_account_is_an_exception",
+    "unknown_instrument_alias_is_an_exception",
+    "supplied_quantity_unit_and_gross_mismatch_is_an_exception",
+    "formula_and_cached_cell_values_are_preserved_without_evaluation",
+    "same_date_source_sequence_is_immutable",
+    "repeat_runs_have_identical_ids_and_hashes"
+  ],
   "non_goals": [
     "No calculation-engine expected values are supplied in Phase 0.",
     "No workbook value, account, holding, or transaction is represented here."
