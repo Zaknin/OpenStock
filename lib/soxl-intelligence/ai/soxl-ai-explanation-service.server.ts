@@ -258,7 +258,6 @@ async function providerAttemptPlan(
 
 function providerRequest(
     prompt: ReturnType<typeof buildSoxlAiPrompt>,
-    aliases: readonly string[],
     strictStructuredOutput: boolean,
 ): SoxlAiLocalProviderRequest {
     const base: SoxlAiLocalProviderRequest = {
@@ -280,7 +279,9 @@ function providerRequest(
     return {
         ...base,
         responseFormat: buildSoxlAiModelExplanationResponseFormat(),
-        allowedEvidenceRefs: aliases,
+        allowedEvidenceRefs: [...new Set(
+            Object.values(prompt.sectionEvidenceRefPolicy.allowedRefs).flat(),
+        )],
     };
 }
 
@@ -310,7 +311,6 @@ export async function generateSoxlAiExplanation(
         input.evidence,
         catalogResult.catalog,
     ).items.length;
-    const aliases = catalogResult.catalog.entries.map(({ alias }) => alias);
     let plan: ProviderAttemptPlan;
     try {
         plan = await providerAttemptPlan(dependencies);
@@ -333,7 +333,6 @@ export async function generateSoxlAiExplanation(
         const attempt = plan.attempts[index];
         const request = providerRequest(
             prompt,
-            aliases,
             attempt.strictStructuredOutput,
         );
         const requestWithMetadata: SoxlAiLocalProviderRequest = {
@@ -374,6 +373,7 @@ export async function generateSoxlAiExplanation(
             providerResult.text,
             input.evidence,
             catalogResult.catalog,
+            prompt.sectionEvidenceRefPolicy,
         );
         if (!validation.valid) {
             validation.issues.forEach((issue) => addIssue(issues, issue));

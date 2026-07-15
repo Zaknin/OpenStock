@@ -380,7 +380,7 @@ describe('generateSoxlAiExplanation', () => {
         });
 
         expect(warnSpy).toHaveBeenCalledWith(
-            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=evidence_refs_too_many section=summary field=evidenceRefs observedCount=21 uniqueCount=21 allowedPromptMaximum=8 validatorMaximum=20',
+            'SOXL_AI_RESPONSE_REJECTED provider=gemini reason=evidence_refs_too_many section=summary field=evidenceRefs observedCount=21 uniqueCount=21 allowedPromptMaximum=1 validatorMaximum=20',
         );
         const diagnostic = JSON.stringify(warnSpy.mock.calls);
         expect(diagnostic).not.toMatch(/E001|generated prose secret|current\.fact\./u);

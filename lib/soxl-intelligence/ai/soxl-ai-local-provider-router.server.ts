@@ -798,9 +798,12 @@ export function createSoxlAiLocalProviderRouteResolver(
 
         const currentTime = now();
         if (primaryCircuit.openUntilMs > currentTime) {
+            console.info(
+                `SOXL_AI_PRIMARY_SKIPPED provider=${config.primary.providerId} reason=primary_circuit_open`,
+            );
             return {
                 attempts: [fallbackCandidate],
-                initialFallbackReason: primaryCircuit.reason ?? 'primary_circuit_open',
+                initialFallbackReason: 'primary_circuit_open',
             };
         }
 

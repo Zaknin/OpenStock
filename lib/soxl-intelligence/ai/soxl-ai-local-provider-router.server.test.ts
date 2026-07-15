@@ -324,6 +324,7 @@ describe('SOXL local provider router', () => {
             request,
             now: () => now,
         });
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
         const first = await resolveRoute();
         expect(first.initialFallbackReason).toBe('primary_health_timeout');
@@ -331,9 +332,12 @@ describe('SOXL local provider router', () => {
         expect(healthAttempts).toBe(1);
 
         const second = await resolveRoute();
-        expect(second.initialFallbackReason).toBe('primary_health_timeout');
+        expect(second.initialFallbackReason).toBe('primary_circuit_open');
         expect(second.attempts.map(({ role }) => role)).toEqual(['fallback']);
         expect(healthAttempts).toBe(1);
+        expect(infoSpy).toHaveBeenCalledWith(
+            'SOXL_AI_PRIMARY_SKIPPED provider=ornith-primary reason=primary_circuit_open',
+        );
 
         now += 60_001;
         const third = await resolveRoute();
@@ -363,11 +367,16 @@ describe('SOXL local provider router', () => {
             body: JSON.stringify({ data: [{ id: 'ornith-35b' }] }),
         }));
         const resolveRoute = createSoxlAiLocalProviderRouteResolver({ request });
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
         noteSoxlAiPrimaryFailure('primary_request_error');
         const whileOpen = await resolveRoute();
+        expect(whileOpen.initialFallbackReason).toBe('primary_circuit_open');
         expect(whileOpen.attempts.map(({ role }) => role)).toEqual(['fallback']);
         expect(request).not.toHaveBeenCalled();
+        expect(infoSpy).toHaveBeenCalledWith(
+            'SOXL_AI_PRIMARY_SKIPPED provider=ornith-primary reason=primary_circuit_open',
+        );
 
         noteSoxlAiPrimarySuccess();
         const afterSuccess = await resolveRoute();

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AIProviderError } from '@/lib/ai-provider';
 import type { SoxlAiEvidencePackage } from './soxl-ai-evidence';
 import {
+    createSoxlAiLocalProviderRouteResolver,
     resetSoxlAiLocalProviderRouterStateForTests,
     type SoxlAiProviderCandidate,
     type SoxlAiProviderRoutePlan,
@@ -90,6 +91,23 @@ function routeResolver(plan: SoxlAiProviderRoutePlan): SoxlAiProviderRouteResolv
     return vi.fn<SoxlAiProviderRouteResolver>().mockResolvedValue(plan);
 }
 
+function configureLocalRouting(): void {
+    vi.stubEnv('SOXL_AI_LOCAL_ROUTING_ENABLED', 'true');
+    vi.stubEnv('SOXL_AI_PRIMARY_BASE_URL', 'http://ornith.test/v1');
+    vi.stubEnv('SOXL_AI_PRIMARY_MODEL', 'ornith-35b');
+    vi.stubEnv('SOXL_AI_PRIMARY_PROVIDER_ID', 'ornith-35b-primary');
+    vi.stubEnv('SOXL_AI_FALLBACK_BASE_URL', 'http://fin-r1.test/v1');
+    vi.stubEnv('SOXL_AI_FALLBACK_MODEL', 'fin-r1-q4km');
+    vi.stubEnv('SOXL_AI_FALLBACK_PROVIDER_ID', 'fin-r1-fallback');
+    vi.stubEnv('SOXL_AI_PRIMARY_CIRCUIT_OPEN_MS', '60000');
+}
+
+function connectionFailure(): Error & { code: string } {
+    const error = new Error('connection refused') as Error & { code: string };
+    error.code = 'ECONNREFUSED';
+    return error;
+}
+
 describe('SOXL AI provider failover', () => {
     it('uses the primary when it returns a validator-accepted response', async () => {
         const primaryCall = vi.fn<SoxlAiProviderCandidate['call']>()
@@ -152,6 +170,44 @@ describe('SOXL AI provider failover', () => {
             fallbackReason: 'primary_validation_rejected',
             issues: [],
         });
+        expect(primaryCall).toHaveBeenCalledTimes(1);
+        expect(fallbackCall).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an over-citing Fin-R1 fallback without bypassing primary failover', async () => {
+        const primaryCall = vi.fn<SoxlAiProviderCandidate['call']>()
+            .mockResolvedValue({ providerId: 'ornith-primary', text: '{bad json' });
+        const fallbackCall = vi.fn<SoxlAiProviderCandidate['call']>()
+            .mockResolvedValue({
+                providerId: 'fin-r1-fallback',
+                text: JSON.stringify({
+                    ...JSON.parse(validResponse()) as Record<string, unknown>,
+                    supportingEvidence: [{
+                        text: 'Too many references.',
+                        evidenceRefs: ['E001', 'E002', 'E003', 'E004', 'E005'],
+                    }],
+                }),
+            });
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const result = await generateSoxlAiExplanation({ evidence: evidence() }, {
+            resolveProviderRoute: routeResolver({
+                attempts: [
+                    candidate('primary', 'ornith-primary', primaryCall),
+                    candidate('fallback', 'fin-r1-fallback', fallbackCall),
+                ],
+                initialFallbackReason: null,
+            }),
+        });
+
+        expect(result).toMatchObject({
+            status: 'unavailable',
+            providerId: 'fin-r1-fallback',
+            providerRole: 'fallback',
+            fallbackUsed: true,
+            fallbackReason: 'primary_validation_rejected',
+        });
+        expect(result.issues).toEqual(['invalid_json', 'evidence_refs_too_many']);
         expect(primaryCall).toHaveBeenCalledTimes(1);
         expect(fallbackCall).toHaveBeenCalledTimes(1);
     });
@@ -362,6 +418,66 @@ describe('SOXL AI provider failover', () => {
             fallbackReason: 'primary_health_timeout',
         });
         expect(fallbackCall).toHaveBeenCalledTimes(1);
+    });
+
+    it('uses Fin-R1 directly while an already-open primary circuit bypasses health and provider requests', async () => {
+        configureLocalRouting();
+        const transport = vi.fn(async (input: { method: 'GET' | 'POST'; url: string }) => {
+            if (input.method === 'GET') {
+                throw connectionFailure();
+            }
+
+            expect(input.url).toBe('http://fin-r1.test/v1/chat/completions');
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    choices: [{
+                        finish_reason: 'stop',
+                        message: { content: validResponse() },
+                    }],
+                }),
+            };
+        });
+        const resolveProviderRoute = createSoxlAiLocalProviderRouteResolver({
+            request: transport,
+        });
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+        const first = await generateSoxlAiExplanation(
+            { evidence: evidence() },
+            { resolveProviderRoute },
+        );
+        expect(first).toMatchObject({
+            status: 'available',
+            providerId: 'fin-r1-fallback',
+            fallbackUsed: true,
+            fallbackReason: 'primary_health_unreachable',
+        });
+        expect(transport.mock.calls.filter(([input]) => input.method === 'GET')).toHaveLength(1);
+        expect(transport.mock.calls.filter(([input]) => (
+            input.method === 'POST' && input.url.includes('ornith.test')
+        ))).toHaveLength(0);
+
+        const second = await generateSoxlAiExplanation(
+            { evidence: evidence() },
+            { resolveProviderRoute },
+        );
+        expect(second).toMatchObject({
+            status: 'available',
+            providerId: 'fin-r1-fallback',
+            fallbackUsed: true,
+            fallbackReason: 'primary_circuit_open',
+        });
+        expect(transport.mock.calls.filter(([input]) => input.method === 'GET')).toHaveLength(1);
+        expect(transport.mock.calls.filter(([input]) => (
+            input.method === 'POST' && input.url.includes('ornith.test')
+        ))).toHaveLength(0);
+        expect(transport.mock.calls.filter(([input]) => (
+            input.method === 'POST' && input.url.includes('fin-r1.test')
+        ))).toHaveLength(2);
+        expect(infoSpy).toHaveBeenCalledWith(
+            'SOXL_AI_PRIMARY_SKIPPED provider=ornith-35b-primary reason=primary_circuit_open',
+        );
     });
 
     it('returns the existing safe unavailable result when both providers fail', async () => {

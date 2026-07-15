@@ -223,7 +223,12 @@ export default function GroundedAiExplanationCard({
                     ) : null}
 
                     {view !== null ? (
-                        <div className="space-y-5">
+                        <div
+                            className="space-y-5"
+                            data-testid="soxl-explanation-result"
+                            data-status={view.status}
+                            data-provider={view.providerId ?? undefined}
+                        >
                             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                                 <div>
                                     <StatusPill view={view} />

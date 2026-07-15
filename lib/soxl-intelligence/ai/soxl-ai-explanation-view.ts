@@ -98,6 +98,7 @@ const issueMessages: Record<SoxlAiCurrentExplanationIssue, string> = {
     other_shape_mismatch: 'The AI response did not pass the grounding and safety checks.',
     status_mismatch: 'The AI response did not pass the grounding and safety checks.',
     unknown_evidence_reference: 'The AI response did not pass the grounding and safety checks.',
+    section_evidence_reference_not_allowed: 'The AI response did not pass the grounding and safety checks.',
     ungrounded_numeric_claim: 'The AI response did not pass the grounding and safety checks.',
     invalid_missing_evidence_reference: 'The AI response did not pass the grounding and safety checks.',
     uncited_missing_evidence: 'The AI response did not pass the grounding and safety checks.',

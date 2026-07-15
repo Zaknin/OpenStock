@@ -138,6 +138,22 @@ describe('SOXL AI evidence reference catalog', () => {
 
         expect(formatter.selectedOutcome).toBe('current_evidence_state');
         expect(formatter.items.map(({ ref }) => ref)).toEqual(['E001']);
+        expect(formatter.sectionEvidenceRefs).toMatchObject({
+            summary: ['E001'],
+            supportingEvidence: ['E001'],
+            conflictingEvidence: ['E001'],
+            missingEvidence: [],
+            riskReminders: ['E001'],
+            limitations: ['E001'],
+        });
+        expect(formatter.sectionEvidenceRefMaximums).toEqual({
+            summary: 1,
+            supportingEvidence: 4,
+            conflictingEvidence: 4,
+            missingEvidence: 1,
+            riskReminders: 2,
+            limitations: 2,
+        });
         expect(serialized).not.toContain('upward_alignment');
         expect(serialized).not.toContain(assessmentId);
     });

@@ -7,6 +7,21 @@ import type {
 export const SOXL_AI_MAX_EVIDENCE_CATALOG_SIZE = 999;
 export const SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT = 20;
 export const SOXL_AI_EVIDENCE_ALIAS_PATTERN = /^E\d{3}$/u;
+export const soxlAiFormatterSections = [
+    'summary',
+    'supportingEvidence',
+    'conflictingEvidence',
+    'missingEvidence',
+    'riskReminders',
+    'limitations',
+] as const;
+
+export type SoxlAiFormatterSection = typeof soxlAiFormatterSections[number];
+
+export interface SoxlAiFormatterEvidenceReferencePolicy {
+    readonly allowedRefs: Readonly<Record<SoxlAiFormatterSection, readonly string[]>>;
+    readonly maxRefs: Readonly<Record<SoxlAiFormatterSection, number>>;
+}
 
 export interface SoxlAiEvidenceReference {
     readonly alias: string;
@@ -53,6 +68,8 @@ export interface SoxlAiFormatterEvidencePackage {
         readonly currentMarketFacts: readonly string[];
         readonly missingEvidence: readonly string[];
     };
+    readonly sectionEvidenceRefs: SoxlAiFormatterEvidenceReferencePolicy['allowedRefs'];
+    readonly sectionEvidenceRefMaximums: SoxlAiFormatterEvidenceReferencePolicy['maxRefs'];
 }
 
 function aliasForIndex(index: number): string {
@@ -167,15 +184,147 @@ function formatterEvidenceIds(
     ]);
 }
 
+const formatterReferencePriorities: Readonly<Record<
+    Exclude<SoxlAiFormatterSection, 'missingEvidence'>,
+    readonly string[]
+>> = {
+    summary: [
+        'current.market_facts.status',
+    ],
+    supportingEvidence: [
+        'current.market_facts.soxl_5m.close_vs_ema20',
+        'current.market_facts.soxl_5m.macd_histogram_sign',
+        'current.market_facts.soxl_daily.close_vs_ema50',
+        'current.market_facts.regular_session.close_vs_vwap',
+    ],
+    conflictingEvidence: [
+        'current.market_facts.soxl_5m.close_vs_latest_confirmed_swing_high',
+        'current.market_facts.soxl_daily.close_vs_latest_confirmed_swing_high',
+        'current.market_facts.regular_session.close_vs_opening_range_high',
+        'current.market_facts.regular_session.close_vs_previous_session_high',
+    ],
+    riskReminders: [
+        'current.market_facts.core_status',
+        'current.market_facts.session_status',
+    ],
+    limitations: [
+        'current.market_facts.status',
+        'current.market_facts.issue',
+    ],
+};
+
+const formatterReferenceMaximums: SoxlAiFormatterEvidenceReferencePolicy['maxRefs'] = {
+    summary: 1,
+    supportingEvidence: 4,
+    conflictingEvidence: 4,
+    missingEvidence: 1,
+    riskReminders: 2,
+    limitations: 2,
+};
+
+function formatterAliasesForIds(
+    ids: readonly string[],
+    selectedIds: ReadonlySet<string>,
+    catalog: SoxlAiEvidenceReferenceCatalog,
+): readonly string[] {
+    return aliasesForIds(ids.filter((id) => selectedIds.has(id)), catalog);
+}
+
+function firstFormatterAlias(
+    selectedIds: ReadonlySet<string>,
+    catalog: SoxlAiEvidenceReferenceCatalog,
+): readonly string[] {
+    const first = catalog.entries.find(({ evidenceId }) => selectedIds.has(evidenceId));
+    return first === undefined ? [] : [first.alias];
+}
+
+function withFallback(
+    aliases: readonly string[],
+    fallback: readonly string[],
+): readonly string[] {
+    return aliases.length > 0 ? aliases : fallback;
+}
+
+export function buildSoxlAiFormatterEvidenceReferencePolicy(
+    evidence: SoxlAiEvidencePackage,
+    catalog: SoxlAiEvidenceReferenceCatalog,
+): SoxlAiFormatterEvidenceReferencePolicy {
+    const selectedIds = formatterEvidenceIds(evidence);
+    const fallback = firstFormatterAlias(selectedIds, catalog);
+    const missingEvidence = formatterAliasesForIds(
+        evidence.groups.missingEvidence,
+        selectedIds,
+        catalog,
+    );
+    const limitations = missingEvidence.length > 0
+        ? missingEvidence.slice(0, formatterReferenceMaximums.limitations)
+        : withFallback(
+            formatterAliasesForIds(
+                formatterReferencePriorities.limitations,
+                selectedIds,
+                catalog,
+            ),
+            fallback,
+        );
+    const summary = [
+        ...withFallback(
+            formatterAliasesForIds(
+                formatterReferencePriorities.summary,
+                selectedIds,
+                catalog,
+            ),
+            fallback,
+        ),
+        ...missingEvidence.slice(0, 1),
+    ].filter((alias, index, aliases) => aliases.indexOf(alias) === index);
+
+    return {
+        allowedRefs: {
+            summary,
+            supportingEvidence: withFallback(
+                formatterAliasesForIds(
+                    formatterReferencePriorities.supportingEvidence,
+                    selectedIds,
+                    catalog,
+                ),
+                fallback,
+            ),
+            conflictingEvidence: withFallback(
+                formatterAliasesForIds(
+                    formatterReferencePriorities.conflictingEvidence,
+                    selectedIds,
+                    catalog,
+                ),
+                fallback,
+            ),
+            missingEvidence,
+            riskReminders: withFallback(
+                formatterAliasesForIds(
+                    formatterReferencePriorities.riskReminders,
+                    selectedIds,
+                    catalog,
+                ),
+                fallback,
+            ),
+            limitations,
+        },
+        maxRefs: formatterReferenceMaximums,
+    };
+}
+
 export function buildSoxlAiFormatterEvidencePackage(
     evidence: SoxlAiEvidencePackage,
     catalog: SoxlAiEvidenceReferenceCatalog,
 ): SoxlAiFormatterEvidencePackage {
     const selectedIds = formatterEvidenceIds(evidence);
+    const policy = buildSoxlAiFormatterEvidenceReferencePolicy(evidence, catalog);
+    const allowedRefs = new Set(Object.values(policy.allowedRefs).flat());
     const full = buildSoxlAiModelEvidencePackage(evidence, catalog);
     const items = full.items.filter(({ ref }) => {
         const canonicalId = catalog.aliasToEvidenceId.get(ref);
-        return canonicalId !== undefined && selectedIds.has(canonicalId);
+        return canonicalId !== undefined
+            && selectedIds.has(canonicalId)
+            && allowedRefs.has(ref);
     });
 
     return {
@@ -185,10 +334,15 @@ export function buildSoxlAiFormatterEvidencePackage(
         items,
         groups: {
             currentMarketFacts: aliasesForIds(
-                evidence.groups.currentMarketFacts.filter((id) => selectedIds.has(id)),
+                evidence.groups.currentMarketFacts.filter((id) => (
+                    selectedIds.has(id)
+                    && allowedRefs.has(catalog.evidenceIdToAlias.get(id) ?? '')
+                )),
                 catalog,
             ),
             missingEvidence: aliasesForIds(evidence.groups.missingEvidence, catalog),
         },
+        sectionEvidenceRefs: policy.allowedRefs,
+        sectionEvidenceRefMaximums: policy.maxRefs,
     };
 }

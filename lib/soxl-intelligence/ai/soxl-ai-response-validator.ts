@@ -4,6 +4,7 @@ import type {
 import {
     SOXL_AI_EVIDENCE_ALIAS_PATTERN,
     SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT,
+    type SoxlAiFormatterEvidenceReferencePolicy,
     type SoxlAiEvidenceReferenceCatalog,
 } from './soxl-ai-evidence-reference-catalog.server';
 import type {
@@ -43,6 +44,7 @@ export type SoxlAiResponseValidationIssue =
     | 'other_shape_mismatch'
     | 'status_mismatch'
     | 'unknown_evidence_reference'
+    | 'section_evidence_reference_not_allowed'
     | 'ungrounded_numeric_claim'
     | 'invalid_missing_evidence_reference'
     | 'uncited_missing_evidence'
@@ -217,6 +219,7 @@ function validateEvidenceRefs(
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
     section: SoxlAiResponseValidationSection,
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): readonly string[] | null {
     if (!Array.isArray(evidenceRefs)) {
         addIssue(context, 'evidence_refs_not_array', 'evidenceRefs', section);
@@ -228,16 +231,20 @@ function validateEvidenceRefs(
         return null;
     }
 
+    const sectionMaximum = policy?.maxRefs[section] ?? (section === 'summary' ? 8 : 6);
     const countDiagnostic: EvidenceRefCountDiagnostic = {
         observedCount: evidenceRefs.length,
         uniqueCount: new Set(evidenceRefs.filter(
             (reference): reference is string => typeof reference === 'string',
         )).size,
-        allowedPromptMaximum: section === 'summary' ? 8 : 6,
+        allowedPromptMaximum: sectionMaximum,
         validatorMaximum: SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT,
     };
 
-    if (evidenceRefs.length > SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT) {
+    if (
+        evidenceRefs.length > sectionMaximum
+        || evidenceRefs.length > SOXL_AI_MAX_EVIDENCE_REFS_PER_POINT
+    ) {
         addIssue(
             context,
             'evidence_refs_too_many',
@@ -296,6 +303,11 @@ function validateEvidenceRefs(
             valid = false;
             return;
         }
+        if (policy !== undefined && !policy.allowedRefs[section].includes(reference)) {
+            addIssue(context, 'section_evidence_reference_not_allowed', 'evidenceRefs', section);
+            valid = false;
+            return;
+        }
         evidenceIds.push(evidenceId);
     });
 
@@ -308,6 +320,7 @@ function validatePoint(
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
     section: PointSectionKey | 'missingEvidence',
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): SoxlAiExplanationPoint | null {
     if (value === null) {
         addIssue(context, 'section_item_not_object', undefined, section);
@@ -368,6 +381,7 @@ function validatePoint(
         validEvidenceIds,
         context,
         section,
+        policy,
     );
     if (evidenceIds === null) {
         return null;
@@ -385,6 +399,7 @@ function validatePointArray(
     validEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
     section: PointSectionKey,
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): readonly SoxlAiExplanationPoint[] {
     if (!Array.isArray(value)) {
         addIssue(context, 'section_not_array', undefined, section);
@@ -398,7 +413,7 @@ function validatePointArray(
 
     const points: SoxlAiExplanationPoint[] = [];
     value.forEach((item) => {
-        const point = validatePoint(item, catalog, validEvidenceIds, context, section);
+        const point = validatePoint(item, catalog, validEvidenceIds, context, section, policy);
         if (point !== null) {
             points.push(point);
         }
@@ -412,6 +427,7 @@ function validateMissingEvidenceArray(
     validEvidenceIds: ReadonlySet<string>,
     missingEvidenceIds: ReadonlySet<string>,
     context: ValidationContext,
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): readonly SoxlAiExplanationPoint[] {
     if (!Array.isArray(value)) {
         addIssue(context, 'section_not_array', undefined, 'missingEvidence');
@@ -426,7 +442,7 @@ function validateMissingEvidenceArray(
     const points: SoxlAiExplanationPoint[] = [];
     const citedMissing = new Set<string>();
     value.forEach((item) => {
-        const point = validatePoint(item, catalog, validEvidenceIds, context, 'missingEvidence');
+        const point = validatePoint(item, catalog, validEvidenceIds, context, 'missingEvidence', policy);
         if (point === null) {
             return;
         }
@@ -618,6 +634,7 @@ function buildResponse(
     context: ValidationContext,
     validEvidenceIds: ReadonlySet<string>,
     missingEvidenceIds: ReadonlySet<string>,
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): SoxlAiValidatedExplanation | null {
     const serverMetadataField = findServerMetadataField(root);
     if (serverMetadataField !== undefined) {
@@ -665,7 +682,7 @@ function buildResponse(
     };
 
     pointSectionKeys.forEach((key) => {
-        sections[key] = validatePointArray(root[key], catalog, validEvidenceIds, context, key);
+        sections[key] = validatePointArray(root[key], catalog, validEvidenceIds, context, key, policy);
     });
     const missingEvidence = validateMissingEvidenceArray(
         root.missingEvidence,
@@ -673,6 +690,7 @@ function buildResponse(
         validEvidenceIds,
         missingEvidenceIds,
         context,
+        policy,
     );
 
     return {
@@ -708,6 +726,7 @@ export function validateSoxlAiModelExplanation(
     rawResponse: string,
     evidence: SoxlAiEvidencePackage,
     catalog: SoxlAiEvidenceReferenceCatalog,
+    policy?: SoxlAiFormatterEvidenceReferencePolicy,
 ): SoxlAiResponseValidationResult {
     const context: ValidationContext = { issues: [], diagnostic: null };
     const parsed = parseRawResponse(rawResponse, context);
@@ -731,6 +750,7 @@ export function validateSoxlAiModelExplanation(
         context,
         validEvidenceIds,
         missingEvidenceIds,
+        policy,
     );
 
     if (response !== null) {

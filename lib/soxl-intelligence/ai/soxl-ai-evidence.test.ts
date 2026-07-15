@@ -487,6 +487,10 @@ describe('buildSoxlAiEvidencePackage', () => {
         const prompt = buildSoxlAiPrompt(result, catalog);
         const formatterEvidence = buildSoxlAiFormatterEvidencePackage(result, catalog);
         const fullEvidence = buildSoxlAiModelEvidencePackage(result, catalog);
+        const policy = {
+            allowedRefs: formatterEvidence.sectionEvidenceRefs,
+            maxRefs: formatterEvidence.sectionEvidenceRefMaximums,
+        };
         const firstRef = formatterEvidence.items[0]?.ref;
         if (firstRef === undefined) {
             throw new Error('Expected compact formatter evidence');
@@ -537,7 +541,28 @@ describe('buildSoxlAiEvidencePackage', () => {
         fullRequest.messages[1].content = fullUserInstruction;
 
         expect(response.text).toBe(modelResponse);
-        expect(validateSoxlAiModelExplanation(modelResponse, result, catalog)).toMatchObject({ valid: true });
+        expect(validateSoxlAiModelExplanation(modelResponse, result, catalog, policy)).toMatchObject({ valid: true });
+        const oversizedSupportingRefs = [
+            ...formatterEvidence.sectionEvidenceRefs.supportingEvidence,
+            ...formatterEvidence.sectionEvidenceRefs.summary,
+        ].filter((ref, index, refs) => refs.indexOf(ref) === index).slice(0, 5);
+        expect(oversizedSupportingRefs).toHaveLength(5);
+        expect(validateSoxlAiModelExplanation(JSON.stringify({
+            ...JSON.parse(modelResponse) as Record<string, unknown>,
+            supportingEvidence: [{
+                text: 'The supplied state has too many references.',
+                evidenceRefs: oversizedSupportingRefs,
+            }],
+        }), result, catalog, policy)).toMatchObject({
+            valid: false,
+            reason: 'evidence_refs_too_many',
+            section: 'supportingEvidence',
+            field: 'evidenceRefs',
+            observedCount: 5,
+            uniqueCount: 5,
+            allowedPromptMaximum: 4,
+            validatorMaximum: 20,
+        });
         expect(prompt.systemInstruction).not.toMatch(/scenario/iu);
         expect(prompt.userInstruction).not.toMatch(/upward_alignment|downward_alignment|preferred scenario/iu);
         expect(formatterEvidence.items.length).toBeLessThan(fullEvidence.items.length);
