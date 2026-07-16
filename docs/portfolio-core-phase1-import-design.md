@@ -12,7 +12,7 @@ The planner is a pure strict-TypeScript module under `lib/portfolio-core/`, test
 
 - Runtime validation is explicit TypeScript rather than a new validation package.
 - SHA-256 identities and plan hashes use Node `node:crypto`.
-- Decimal values remain source strings. The only decimal operation is an exact string/`bigint` multiplication used to detect a supplied quantity-times-unit versus supplied gross inconsistency; it never overwrites either value.
+- Decimal values remain source strings. The only decimal operation is exact string-digit multiplication used to detect a supplied quantity-times-unit versus supplied gross inconsistency; it never overwrites either value.
 - The Node 24 type-stripping runtime executes a thin TypeScript CLI. The CLI reads JSON only, has no network/database imports, and writes only beneath `.local/portfolio-core-import-plans/`.
 
 This follows the repository's existing strict TypeScript, Vitest, and `node:crypto` conventions while leaving existing MongoDB/Mongoose code untouched.
@@ -95,4 +95,28 @@ It writes a count-only `summary.json`, a manifest, and separate proposal/excepti
 
 ## Explicit exclusions
 
-No holding, ACB, gain, price, quote, FX, valuation, performance, split posting, spin-off posting, dashboard, database write, API, background job, or UI behavior is present. Proposed types and imported raw records remain unverified until they reconcile with the frozen fixture evidence described by the reconciliation matrix.
+No holding, ACB, gain, price, quote, FX, valuation, performance, split posting, spin-off posting, dashboard, API, background job, or UI behavior is present. Phase 1B writes only non-authoritative staging evidence; it does not write canonical masters or an accounting ledger. Proposed types and imported raw records remain unverified until they reconcile with the frozen fixture evidence described by the reconciliation matrix.
+
+## Phase 1B persistence approach
+
+Phase 1B adds a server-only native-Mongo staging repository. It uses the existing `mongodb` dependency and project `db.collection(...)` convention rather than adding a Mongoose model for future accounting entities. Source decimals and dates remain the planner's original strings inside raw/normalized payloads; only staging timestamps use Mongo `Date` values.
+
+The repository owns these collections only: `portfolioImportBatches`, `portfolioImportMasterProposals`, `portfolioImportTransactionProposals`, `portfolioImportIssues`, and `portfolioImportAuditEvents`. They are staging evidence, never `Portfolio`, `Account`, `Instrument`, or ledger records. The repository creates the following indexes: `portfolioImportBatches(batchId)` and unique `(sourceWorkbookHash, planHash)`; unique master `(batchId, proposalId)`; unique transaction `(batchId, proposalId)` and `(batchId, sourceSheet, sourceRow, sourceSequence)`; unique issue `(batchId, issueId)`; and audit `eventId` plus `(batchId, timestamp)`.
+
+The intended unique indexes are batch `(sourceWorkbookHash, planHash)`, proposal `(batchId, proposalId)`, issue `(batchId, issueId)`, and `(batchId, sourceSheet, sourceRow, sourceSequence)` for transaction-source identity. A changed plan for the same workbook produces a distinct batch even where a deterministic source proposal ID recurs; an existing `(sourceWorkbookHash, planHash)` returns idempotently without inserting any record.
+
+When a Mongo client supports multi-document transactions, batch, proposal, issue, audit, and final-status writes run in one transaction. If the deployment rejects transaction capability, the repository uses a documented compensating-write path: it writes a `writing` batch, inserts the complete set, marks completion only at the end, and deletes every staging document for that batch on an error. Consequently no partial batch can be reported complete and no orphan proposal/issue remains.
+
+Issue records retain only stable code, severity, source-column identifiers, provenance, and structured disposition metadata. They never duplicate source values in messages. Allowed lifecycle states are `open`, `acknowledged`, `accepted-as-source`, `corrected-by-amendment`, `rejected`, and `superseded`; a disposition cannot modify the original raw proposal.
+
+The server CLI requires `PORTFOLIO_CORE_MONGODB_URI`, deliberately separate from the application's general Mongo configuration. It accepts `--dry-run` or `--persist`; dry-run does not connect:
+
+```text
+node scripts/portfolio-core/persist-import.ts --fixture .local/portfolio-core-fixtures/<fixture-pack> --dry-run --non-strict
+node scripts/portfolio-core/persist-import.ts --fixture .local/portfolio-core-fixtures/<fixture-pack> --persist --non-strict
+node scripts/portfolio-core/inspect-import-staging.ts --batch <batch-id>
+```
+
+Exit codes are: `0` persisted/planned with no blocking issues, `4` persisted/planned with blocking issues, `2` malformed fixture or arguments, `3` persistence/configuration failure, and `1` internal failure. The inspection CLI emits only counts, codes, state, identifiers/hash prefixes, and provenance/idempotency status.
+
+Phase 1C promotion is gated on a reviewed completed staging batch, no unresolved blocking issue unless explicitly accepted as source, complete provenance, approved alias/account dispositions, and a separate authorization to create canonical masters and ledger inputs.
